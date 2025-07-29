@@ -5,8 +5,7 @@ constants:
   port: 3332
   # please use your own X25519 key, this is only an example
   # you can generate a new key by running `veramo config gen-key` in a terminal
-  dbEncryptionKey: 29739248cad1bd1a0fc4d9b75cd4d2990de535baf5caadfdf8d8f86664aa830c
-  databaseFile: ./database.sqlite
+  dbEncryptionKey: DB_ENCRYPTION_KEY
   methods:
     - keyManagerGetKeyManagementSystems
     - keyManagerCreate
@@ -76,10 +75,13 @@ constants:
 dbConnection:
   $require: typeorm#DataSource
   $args:
-    - type: sqlite
-      database:
-        $ref: /constants/databaseFile
-      synchronize: false
+    - type: postgres
+      host: localhost
+      port: 5432
+      username: POSTGRESQL_USER
+      password: POSTGRESQL_PASS
+      database: POSTGRESQL_DB
+      synchronize: true
       migrationsRun: true
       migrations:
         $require: "@veramo/data-store?t=object#migrations"
@@ -211,22 +213,22 @@ keyManager:
                   $args:
                     - $ref: /constants/dbEncryptionKey
 
-didCheqdMainnetProvider:
-  $require: "@cheqd/did-provider-cheqd#CheqdDIDProvider"
-  $args:
-    - defaultKms: local
-      cosmosPayerSeed: <your payer mnemonic seed or private key>
-      networkType: mainnet
-      rpcUrl: "https://rpc.cheqd.net"
-      dkgOptions:
-        chain: cheqdMainnet
-        network: datil-dev
+# didCheqdMainnetProvider:
+#   $require: "@cheqd/did-provider-cheqd#CheqdDIDProvider"
+#   $args:
+#     - defaultKms: local
+#       cosmosPayerSeed: <your payer mnemonic seed or private key>
+#       networkType: mainnet
+#       rpcUrl: "https://rpc.cheqd.net"
+#       dkgOptions:
+#         chain: cheqdMainnet
+#         network: datil-dev
 
 didCheqdTestnetProvider:
   $require: "@cheqd/did-provider-cheqd#CheqdDIDProvider"
   $args:
     - defaultKms: local
-      cosmosPayerSeed: <your payer mnemonic seed or private key>
+      cosmosPayerSeed: CHEQD_PAYER_SEED
       networkType: testnet
       rpcUrl: "https://rpc.cheqd.network"
       dkgOptions:
@@ -243,8 +245,8 @@ didManager:
           - $ref: /dbConnection
       defaultProvider: did:cheqd:testnet
       providers:
-        did:cheqd:mainnet:
-          $ref: /didCheqdMainnetProvider
+        # did:cheqd:mainnet:
+        #   $ref: /didCheqdMainnetProvider
         did:cheqd:testnet:
           $ref: /didCheqdTestnetProvider
         did:key:
@@ -297,4 +299,4 @@ agent:
           $args:
             - providers:
                 - $ref: /didCheqdTestnetProvider
-                - $ref: /didCheqdMainnetProvider
+                # - $ref: /didCheqdMainnetProvider

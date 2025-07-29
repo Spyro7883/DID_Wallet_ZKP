@@ -1,3 +1,8 @@
 package-lock.json
 node_modules
 .env
+.env.local
+did_doc.json
+did_final.json
+payload.json
+rest.txt
