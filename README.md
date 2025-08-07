@@ -29,3 +29,5 @@ npx veramo did resolve "your-did"
 Look at your document on the cheqd space
 
 curl -L "https://resolver.cheqd.net/1.0/identifiers/your-did/resources/checksum-value" --output file-name
+
+snarkjs generatecall | sed '1s/^/[/; $s/$/]/' > calldata.json

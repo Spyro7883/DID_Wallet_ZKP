@@ -16,6 +16,8 @@
   },
   "devDependencies": {
     "@cheqd/did-provider-cheqd": "^4.6.0",
-    "@veramo/cli": "^6.0.0"
+    "@nomicfoundation/hardhat-toolbox": "^6.1.0",
+    "@veramo/cli": "^6.0.0",
+    "hardhat": "^2.26.1"
   }
 }

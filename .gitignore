@@ -5,3 +5,9 @@ node_modules
 payload.json
 rest
 build
+artifacts
+cache
+typechain-types
+ignition/deployments
+test
+contracts

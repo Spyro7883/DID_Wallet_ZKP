@@ -17,4 +17,4 @@ snarkjs groth16 prove build/circuit_final.zkey build/witness.wtns build/proof.js
 
 snarkjs groth16 verify build/verification_key.json build/public.json build/proof.json
 
-snarkjs zkey export solidityverifier build/circuit_final.zkey build/verifier.sol
+snarkjs zkey export solidityverifier build/circuit_final.zkey contracts/verifier.sol
