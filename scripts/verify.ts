@@ -1,11 +1,26 @@
 import { ethers } from "hardhat";
 import * as fs from "fs";
-import * as dotenv from "dotenv";
-
-dotenv.config();
+import path from "path";
 
 async function main() {
-  const contractAddress = process.env.VERIFY_PROOF_ADDRESS!;
+  const { chainId } = await ethers.provider.getNetwork();
+  const deployedPath = path.join(
+    "ignition",
+    "deployments",
+    `chain-${chainId}`,
+    "deployed_addresses.json"
+  );
+
+  const deployed = JSON.parse(fs.readFileSync(deployedPath, "utf8"));
+
+  const contractAddress: string =
+    deployed["VerifierModule#Groth16Verifier"] ?? Object.values(deployed)[0];
+
+  if (typeof contractAddress !== "string") {
+    throw new Error(
+      "❌ Contract's address has not been found in deployed_addresses.json"
+    );
+  }
 
   const verifier = await ethers.getContractAt(
     "Groth16Verifier",

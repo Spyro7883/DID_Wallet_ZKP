@@ -31,3 +31,9 @@ Look at your document on the cheqd space
 curl -L "https://resolver.cheqd.net/1.0/identifiers/your-did/resources/checksum-value" --output file-name
 
 snarkjs generatecall | sed '1s/^/[/; $s/$/]/' > calldata.json
+
+npx hardhat compile
+
+npx hardhat ignition deploy ignition/modules/VerifierModule.ts --network sepolia --verify
+
+npx hardhat run scripts/verify.ts --network sepolia
