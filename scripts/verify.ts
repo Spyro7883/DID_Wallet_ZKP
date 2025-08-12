@@ -3,6 +3,11 @@ import * as fs from "fs";
 import path from "path";
 
 async function main() {
+  const contractKey = process.env.CIRCUIT;
+  if (!contractKey) {
+    console.error("❌ Specify the contract.");
+    process.exit(1);
+  }
   const { chainId } = await ethers.provider.getNetwork();
   const deployedPath = path.join(
     "ignition",
@@ -14,7 +19,8 @@ async function main() {
   const deployed = JSON.parse(fs.readFileSync(deployedPath, "utf8"));
 
   const contractAddress: string =
-    deployed["VerifierModule#Groth16Verifier"] ?? Object.values(deployed)[0];
+    deployed[`${contractKey}Module#${contractKey}Verifier`] ??
+    Object.values(deployed)[0];
 
   if (typeof contractAddress !== "string") {
     throw new Error(
@@ -23,12 +29,12 @@ async function main() {
   }
 
   const verifier = await ethers.getContractAt(
-    "Groth16Verifier",
+    `${contractKey}Verifier`,
     contractAddress
   );
 
   const [a, b, c, input] = JSON.parse(
-    fs.readFileSync("build/calldata.json", "utf8")
+    fs.readFileSync(`build/${contractKey}/calldata.json`, "utf8")
   );
   const isValid = await verifier.verifyProof(
     a as [string, string],

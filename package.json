@@ -13,8 +13,9 @@
     "zk:prove": "snarkjs groth16 prove ./build/$CIRCUIT/circuit_final.zkey ./build/$CIRCUIT/witness.wtns ./build/$CIRCUIT/proof.json ./build/$CIRCUIT/public.json && snarkjs groth16 verify ./build/$CIRCUIT/verification_key.json ./build/$CIRCUIT/public.json ./build/$CIRCUIT/proof.json && mkdir -p contracts/$CIRCUIT && snarkjs zkey export solidityverifier ./build/$CIRCUIT/circuit_final.zkey ./contracts/$CIRCUIT/verifier.sol && sed -i \"s/contract Groth16Verifier/contract ${CIRCUIT}Verifier/\" contracts/$CIRCUIT/verifier.sol",
     "zk:full": "npm run zk:prep && npm run zk:input && npm run zk:prove",
     "zk:calldata": "cd build/$CIRCUIT && snarkjs generatecall | sed '1s/^/[/; $s/$/]/' > calldata.json",
-    "zk:compile-deploy": "rm -rf ./ignition/deployments/chain-* && npx hardhat compile && npx hardhat ignition deploy ignition/modules/VerifierModule.ts --network sepolia --verify",
+    "zk:compile-deploy": "npx hardhat compile && npx hardhat ignition deploy ignition/modules/${CIRCUIT}Module.ts --network sepolia --verify",
     "zk:verify-onchain": "npx hardhat run scripts/verify.ts --network sepolia",
+    "zk:clean-deployments": "rm -rf ./ignition/deployments/chain-*",
     "zk:clean": "rm -rf ./build/*"
   },
   "keywords": [],

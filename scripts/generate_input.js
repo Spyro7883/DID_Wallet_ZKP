@@ -42,7 +42,7 @@ if (circuit === 'incomeRange') {
     const Ls = readArg('L');
     const Us = readArg('U');
     if (!Ls || !Us) {
-        console.error('❌ Set L and U:  node generate_input.js Income_Range vc_income.json --L=8000 --U=15000');
+        console.error('❌ Set L and U:  node generate_input.js incomeRange vc_income.json --L=8000 --U=15000');
         process.exit(1);
     }
     const Li = BigInt(String(Ls));
