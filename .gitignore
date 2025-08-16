@@ -3,6 +3,8 @@ node_modules
 .env
 .env.local
 payload.json
+access_payload.json
+token.txt
 rest
 build
 artifacts

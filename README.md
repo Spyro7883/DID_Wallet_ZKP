@@ -45,3 +45,7 @@ npx hardhat compile
 npx hardhat ignition deploy ignition/modules/VerifierModule.ts --network sepolia --verify
 
 npx hardhat run scripts/verify.ts --network sepolia
+
+### Payload command
+
+npm run payload -- --vp rest/vp_demo.json --audience service:demo --nonce 0xYourNonceAddress --age-proof build/age/proof.json --age-public build/age/public.json --cit-proof build/citizenship/proof.json --cit-public build/citizenship/public.json --inc-proof build/incomeRange/proof.json --inc-public build/incomeRange/public.json --augment --out your_payload.json

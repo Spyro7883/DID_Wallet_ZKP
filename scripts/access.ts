@@ -1,0 +1,15 @@
+import { readFileSync, existsSync } from "fs";
+import { fetch } from "undici";
+
+const VERIFIER = process.env.VERIFIER || "http://localhost:5501";
+const PATH = process.argv[2] || "/secret";
+
+(async () => {
+  if (!existsSync(".token.txt"))
+    return console.error("❌ No token, run present first.");
+  const token = readFileSync(".token.txt", "utf8").trim();
+  const r = await fetch(`${VERIFIER}${PATH}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  console.log(await r.text());
+})();

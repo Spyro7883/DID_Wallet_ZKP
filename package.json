@@ -9,22 +9,34 @@
     "zk:ptau": "snarkjs powersoftau new bn128 12 ./build/$CIRCUIT/pot12_0000.ptau -v && snarkjs powersoftau contribute ./build/$CIRCUIT/pot12_0000.ptau ./build/$CIRCUIT/pot12_0001.ptau --name='first' -v && snarkjs powersoftau prepare phase2 ./build/$CIRCUIT/pot12_0001.ptau ./build/$CIRCUIT/pot12_final.ptau -v",
     "zk:setup": "snarkjs groth16 setup ./build/$CIRCUIT/$CIRCUIT.r1cs ./build/$CIRCUIT/pot12_final.ptau ./build/$CIRCUIT/circuit_0000.zkey && snarkjs zkey contribute ./build/$CIRCUIT/circuit_0000.zkey ./build/$CIRCUIT/circuit_final.zkey --name='1st contributor' -v && snarkjs zkey export verificationkey ./build/$CIRCUIT/circuit_final.zkey ./build/$CIRCUIT/verification_key.json",
     "zk:prep": "npm run zk:compile && npm run zk:ptau && npm run zk:setup",
-    "zk:input": "node ./scripts/generate_input.js $CIRCUIT rest/$CIRCUIT.json $EXTRA_ARGS && node ./build/$CIRCUIT/${CIRCUIT}_js/generate_witness.js ./build/$CIRCUIT/${CIRCUIT}_js/${CIRCUIT}.wasm ./build/$CIRCUIT/${CIRCUIT}_js/input.json ./build/$CIRCUIT/witness.wtns",
+    "zk:input": "node ./scripts/generate_input.js $CIRCUIT rest/vp_demo.json $EXTRA_ARGS && node ./build/$CIRCUIT/${CIRCUIT}_js/generate_witness.js ./build/$CIRCUIT/${CIRCUIT}_js/${CIRCUIT}.wasm ./build/$CIRCUIT/${CIRCUIT}_js/input.json ./build/$CIRCUIT/witness.wtns",
     "zk:prove": "snarkjs groth16 prove ./build/$CIRCUIT/circuit_final.zkey ./build/$CIRCUIT/witness.wtns ./build/$CIRCUIT/proof.json ./build/$CIRCUIT/public.json && snarkjs groth16 verify ./build/$CIRCUIT/verification_key.json ./build/$CIRCUIT/public.json ./build/$CIRCUIT/proof.json && mkdir -p contracts/$CIRCUIT && snarkjs zkey export solidityverifier ./build/$CIRCUIT/circuit_final.zkey ./contracts/$CIRCUIT/verifier.sol && sed -i \"s/contract Groth16Verifier/contract ${CIRCUIT}Verifier/\" contracts/$CIRCUIT/verifier.sol",
     "zk:full": "npm run zk:prep && npm run zk:input && npm run zk:prove",
     "zk:calldata": "cd build/$CIRCUIT && snarkjs generatecall | sed '1s/^/[/; $s/$/]/' > calldata.json",
     "zk:compile-deploy": "npx hardhat compile && npx hardhat ignition deploy ignition/modules/${CIRCUIT}Module.ts --network sepolia --verify",
     "zk:verify-onchain": "npx hardhat run scripts/verify.ts --network sepolia",
     "zk:clean-deployments": "rm -rf ./ignition/deployments/chain-*",
-    "zk:clean": "rm -rf ./build/*"
+    "zk:clean": "rm -rf ./build/*",
+    "server": "npx tsx scripts/server.ts",
+    "nonce": "npx tsx scripts/getNonce.ts",
+    "payload": "npx tsx scripts/payload.ts",
+    "present": "npx tsx scripts/present.ts access_payload.json",
+    "access": "npx tsx scripts/access.ts /secret"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "body-parser": "^2.2.0",
     "circomlib": "^2.0.5",
     "circomlibjs": "^0.1.7",
-    "pg": "^8.16.3"
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "jose": "^6.0.12",
+    "pg": "^8.16.3",
+    "snarkjs": "^0.7.5",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@cheqd/did-provider-cheqd": "^4.6.0",
