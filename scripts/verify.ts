@@ -1,4 +1,4 @@
-import { ethers } from "hardhat";
+import { network } from "hardhat";
 import * as fs from "fs";
 import path from "path";
 
@@ -8,6 +8,7 @@ async function main() {
     console.error("❌ Specify the contract.");
     process.exit(1);
   }
+  const { ethers } = await network.connect();
   const { chainId } = await ethers.provider.getNetwork();
   const deployedPath = path.join(
     "ignition",

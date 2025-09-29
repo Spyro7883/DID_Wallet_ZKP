@@ -1,6 +1,7 @@
 {
   "name": "did_wallet_zkp",
   "version": "1.0.0",
+  "type": "module",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -20,7 +21,7 @@
     "server": "npx tsx scripts/server.ts",
     "nonce": "npx tsx scripts/getNonce.ts",
     "payload": "npx tsx scripts/payload.ts",
-    "present": "npx tsx scripts/present.ts access_payload.json",
+    "present": "npx tsx scripts/present.ts your_payload.json",
     "access": "npx tsx scripts/access.ts /secret"
   },
   "keywords": [],
@@ -40,8 +41,17 @@
   },
   "devDependencies": {
     "@cheqd/did-provider-cheqd": "^4.6.0",
-    "@nomicfoundation/hardhat-toolbox": "^6.1.0",
+    "@nomicfoundation/hardhat-toolbox-mocha-ethers": "^3.0.0",
+    "@nomicfoundation/hardhat-typechain": "^3.0.0",
+    "@openzeppelin/contracts": "^5.4.0",
+    "@typechain/ethers-v6": "^0.5.1",
+    "@types/chai": "^5.2.2",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^22.18.0",
     "@veramo/cli": "^6.0.0",
-    "hardhat": "^2.26.1"
+    "forge-std": "github:foundry-rs/forge-std#v1.9.4",
+    "hardhat": "^3.0.2",
+    "typechain": "^8.3.2",
+    "typescript": "~5.8.0"
   }
 }
