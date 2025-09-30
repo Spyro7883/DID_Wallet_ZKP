@@ -15,5 +15,3 @@ template Citizenship_Verification() {
 
     isEligible <== 1;
 }
-
-component main = Citizenship_Verification();

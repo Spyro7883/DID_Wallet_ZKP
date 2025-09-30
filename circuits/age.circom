@@ -6,7 +6,7 @@ include "../node_modules/circomlib/circuits/comparators.circom";
 template Age_Verification() {
     signal input age;
     signal input salt;
-    signal input privHash;
+    signal output privHash;
     signal output isEligible;
 
     component h = Poseidon(2);
@@ -20,5 +20,3 @@ template Age_Verification() {
 
     isEligible <== cmp.out;
 }
-
-component main = Age_Verification();
