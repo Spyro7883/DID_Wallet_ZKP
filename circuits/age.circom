@@ -3,16 +3,17 @@ pragma circom 2.0.0;
 include "../node_modules/circomlib/circuits/poseidon.circom";
 include "../node_modules/circomlib/circuits/comparators.circom";
 
-template Age_Verification() {
+template AgeVerification() {
     signal input age;
     signal input salt;
+
     signal output privHash;
     signal output isEligible;
 
     component h = Poseidon(2);
     h.inputs[0] <== age;
     h.inputs[1] <== salt;
-    privHash === h.out;
+    privHash <== h.out;
 
     component cmp = GreaterEqThan(8);
     cmp.in[0] <== age;

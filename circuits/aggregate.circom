@@ -1,7 +1,5 @@
 pragma circom 2.0.0;
 include "../node_modules/circomlib/circuits/poseidon.circom";
-include "../node_modules/circomlib/circuits/comparators.circom";
-include "../node_modules/circomlib/circuits/bitify.circom";
 
 include "./age.circom";
 include "./citizenship.circom";
@@ -13,24 +11,16 @@ template Aggregate() {
   signal input citizenship;
   signal input income;
   signal input salt;
-
-  signal input privHash;
+  
+  signal input expectedCitizenship;
   signal input L;
   signal input U;
   
-  signal output ok;
-
-  component ageCheck = Age_Verification();
-  component citizenshipCheck = Citizenship_Verification();
-  component incomeRangeCheck = Income_Range();
-
-  ageCheck.age <== age;
-
-  citizenshipCheck.citizenship <== citizenship;
-
-  incomeRangeCheck.income <== income;
-  incomeRangeCheck.L      <== L;
-  incomeRangeCheck.U      <== U;
+  signal output allValid;
+  signal output privHash;
+  signal output agePrivHash;
+  signal output citizenshipPrivHash;
+  signal output incomePrivHash;
 
   component h = Poseidon(4);
   h.inputs[0] <== age;
@@ -38,8 +28,28 @@ template Aggregate() {
   h.inputs[2] <== income;
   h.inputs[3] <== salt;
     
-  privHash === h.out; 
+  privHash <== h.out; 
 
-  ok <== ageCheck.ok * citizenshipCheck.ok * incomeRangeCheck.ok;
+  component ageCheck = AgeVerification();
+  ageCheck.age <== age;
+  ageCheck.salt <== salt;
+  agePrivHash <== ageCheck.privHash;
+    
+  component citizenCheck = CitizenshipVerification();
+  citizenCheck.citizenship <== citizenship;
+  citizenCheck.salt <== salt;
+  citizenCheck.expectedCitizenship <== expectedCitizenship;
+  citizenshipPrivHash <== citizenCheck.privHash;
+    
+  component incomeCheck = IncomeRange();
+  incomeCheck.income <== income;
+  incomeCheck.salt <== salt;
+  incomeCheck.L <== L;
+  incomeCheck.U <== U;
+  incomePrivHash <== incomeCheck.privHash;
+
+  signal ageAndCitizen;
+  ageAndCitizen <== ageCheck.isEligible * citizenCheck.isEligible;
+  allValid <== ageAndCitizen * incomeCheck.inRange;
 }
 component main = Aggregate();
