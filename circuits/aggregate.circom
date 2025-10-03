@@ -15,6 +15,7 @@ template Aggregate() {
   signal input expectedCitizenship;
   signal input L;
   signal input U;
+  signal input contextId;
   
   signal output allValid;
   signal output privHash;
@@ -22,11 +23,12 @@ template Aggregate() {
   signal output citizenshipPrivHash;
   signal output incomePrivHash;
 
-  component h = Poseidon(4);
+  component h = Poseidon(5);
   h.inputs[0] <== age;
   h.inputs[1] <== citizenship;
   h.inputs[2] <== income;
   h.inputs[3] <== salt;
+  h.inputs[4] <== contextId;
     
   privHash <== h.out; 
 
@@ -52,4 +54,4 @@ template Aggregate() {
   ageAndCitizen <== ageCheck.isEligible * citizenCheck.isEligible;
   allValid <== ageAndCitizen * incomeCheck.inRange;
 }
-component main = Aggregate();
+component main {public [expectedCitizenship, L, U, contextId]} = Aggregate();

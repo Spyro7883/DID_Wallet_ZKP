@@ -41,7 +41,7 @@ async function main() {
     a as [string, string],
     b as [[string, string], [string, string]],
     c as [string, string],
-    [input[0]] as [string]
+    input as string[]
   );
 
   console.log("Result:", isValid);

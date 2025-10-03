@@ -6,11 +6,11 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "zk:compile": "mkdir -p build/$CIRCUIT && circom ./circuits/$CIRCUIT.circom --r1cs --wasm --sym -o ./build/$CIRCUIT -l circomlib/circuits",
+    "zk:compile": "mkdir -p build/$CIRCUIT && circom ./circuits/$CIRCUIT.circom --r1cs --wasm --sym -o ./build/$CIRCUIT -l circomlib/circuits && echo '{\"type\":\"commonjs\"}' > ./build/$CIRCUIT/${CIRCUIT}_js/package.json",
     "zk:ptau": "snarkjs powersoftau new bn128 12 ./build/$CIRCUIT/pot12_0000.ptau -v && snarkjs powersoftau contribute ./build/$CIRCUIT/pot12_0000.ptau ./build/$CIRCUIT/pot12_0001.ptau --name='first' -v && snarkjs powersoftau prepare phase2 ./build/$CIRCUIT/pot12_0001.ptau ./build/$CIRCUIT/pot12_final.ptau -v",
     "zk:setup": "snarkjs groth16 setup ./build/$CIRCUIT/$CIRCUIT.r1cs ./build/$CIRCUIT/pot12_final.ptau ./build/$CIRCUIT/circuit_0000.zkey && snarkjs zkey contribute ./build/$CIRCUIT/circuit_0000.zkey ./build/$CIRCUIT/circuit_final.zkey --name='1st contributor' -v && snarkjs zkey export verificationkey ./build/$CIRCUIT/circuit_final.zkey ./build/$CIRCUIT/verification_key.json",
     "zk:prep": "npm run zk:compile && npm run zk:ptau && npm run zk:setup",
-    "zk:input": "node ./scripts/generate_input.js $CIRCUIT rest/vp_demo.json $EXTRA_ARGS && node ./build/$CIRCUIT/${CIRCUIT}_js/generate_witness.js ./build/$CIRCUIT/${CIRCUIT}_js/${CIRCUIT}.wasm ./build/$CIRCUIT/${CIRCUIT}_js/input.json ./build/$CIRCUIT/witness.wtns",
+    "zk:input": "tsx ./scripts/generate_input.ts $CIRCUIT rest/vp_demo.json $EXTRA_ARGS && node ./build/$CIRCUIT/${CIRCUIT}_js/generate_witness.js ./build/$CIRCUIT/${CIRCUIT}_js/${CIRCUIT}.wasm ./build/$CIRCUIT/${CIRCUIT}_js/input.json ./build/$CIRCUIT/witness.wtns",
     "zk:prove": "snarkjs groth16 prove ./build/$CIRCUIT/circuit_final.zkey ./build/$CIRCUIT/witness.wtns ./build/$CIRCUIT/proof.json ./build/$CIRCUIT/public.json && snarkjs groth16 verify ./build/$CIRCUIT/verification_key.json ./build/$CIRCUIT/public.json ./build/$CIRCUIT/proof.json && mkdir -p contracts/$CIRCUIT && snarkjs zkey export solidityverifier ./build/$CIRCUIT/circuit_final.zkey ./contracts/$CIRCUIT/verifier.sol && sed -i \"s/contract Groth16Verifier/contract ${CIRCUIT}Verifier/\" contracts/$CIRCUIT/verifier.sol",
     "zk:full": "npm run zk:prep && npm run zk:input && npm run zk:prove",
     "zk:calldata": "cd build/$CIRCUIT && snarkjs generatecall | sed '1s/^/[/; $s/$/]/' > calldata.json",

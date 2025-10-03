@@ -1,6 +1,7 @@
 pragma circom 2.0.0;
 
 include "../node_modules/circomlib/circuits/poseidon.circom";
+include "../node_modules/circomlib/circuits/bitify.circom";
 include "../node_modules/circomlib/circuits/comparators.circom";
 
 template AgeVerification() {
@@ -9,6 +10,9 @@ template AgeVerification() {
 
     signal output privHash;
     signal output isEligible;
+
+    component ageBits = Num2Bits(8);
+    ageBits.in <== age;
 
     component h = Poseidon(2);
     h.inputs[0] <== age;
