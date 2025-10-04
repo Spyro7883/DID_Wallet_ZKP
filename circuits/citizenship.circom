@@ -12,8 +12,8 @@ template CitizenshipVerification() {
     signal output privHash;
     signal output isEligible;
 
-       component cBits  = Num2Bits(8); cBits.in  <== citizenship;
-    component eBits  = Num2Bits(8); eBits.in  <== expectedCitizenship;
+    component cBits  = Num2Bits(16); cBits.in  <== citizenship;
+    component eBits  = Num2Bits(16); eBits.in  <== expectedCitizenship;
 
     component h = Poseidon(2);
     h.inputs[0] <== citizenship;
