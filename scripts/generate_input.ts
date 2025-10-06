@@ -205,6 +205,17 @@ function ensureDir(p: string) {
   const U = BigInt(policy.U);
   if (!(L < U)) throw new Error("Policy invalid: L must be < U");
 
+  const fails: string[] = [];
+  if (citizenship!.toString() !== expectedCitizenshipNum)
+    fails.push("citizenship≠expected");
+  if (age! < 18n) fails.push("age<18");
+  if (!(income! >= L && income! < U)) fails.push(`income∉[${L},${U})`);
+
+  if (fails.length) {
+    console.error("❌ Eligibility failed:", fails.join(", "));
+    process.exit(2);
+  }
+
   const lc = circuit.toLowerCase();
   const baseOut: Record<string, string> = {};
 

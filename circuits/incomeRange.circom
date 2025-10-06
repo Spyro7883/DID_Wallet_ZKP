@@ -13,26 +13,27 @@ template IncomeRange() {
   
   signal output privHash;
   signal output inRange;
+  signal output policyOk;
 
-  component incBits = Num2Bits(64); incBits.in <== income;
-  component lBits   = Num2Bits(64); lBits.in   <== L;
-  component uBits   = Num2Bits(64); uBits.in   <== U;
+  component incBits = Num2Bits(32); incBits.in <== income;
+  component lBits   = Num2Bits(32); lBits.in   <== L;
+  component uBits   = Num2Bits(32); uBits.in   <== U;
 
   component h = Poseidon(2);
   h.inputs[0] <== income;
   h.inputs[1] <== salt;
   privHash <== h.out;
 
-  component ltLU = LessThan(64);
+  component ltLU = LessThan(32);
   ltLU.in[0] <== L;
   ltLU.in[1] <== U;
-  ltLU.out === 1;
+  policyOk <== ltLU.out;
 
-  component geL = GreaterEqThan(64);
+  component geL = GreaterEqThan(32);
   geL.in[0] <== income;
   geL.in[1] <== L;
 
-  component ltU = LessThan(64);
+  component ltU = LessThan(32);
   ltU.in[0] <== income;
   ltU.in[1] <== U;
 

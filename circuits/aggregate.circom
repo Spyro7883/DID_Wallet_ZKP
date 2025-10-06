@@ -53,5 +53,9 @@ template Aggregate() {
   signal ageAndCitizen;
   ageAndCitizen <== ageCheck.isEligible * citizenCheck.isEligible;
   allValid <== ageAndCitizen * incomeCheck.inRange;
+
+  allValid === 1;
+
+  incomeCheck.policyOk === 1;
 }
 component main {public [expectedCitizenship, L, U, contextId]} = Aggregate();
