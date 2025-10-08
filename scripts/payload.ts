@@ -1,20 +1,37 @@
+// scripts/payload.ts
 import { Command } from "commander";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, extname } from "node:path";
 
 type Json = Record<string, any>;
-type ProofPack = { proof: any; publicSignals: Json };
+type ProofPack = { proof: any; publicSignals: any };
 
+// Ordinea publicSignals în aggregate.circom
+const IDX = {
+  allValid: 0,
+  privHash: 1,
+  agePrivHash: 2,
+  citizenshipPrivHash: 3,
+  incomePrivHash: 4,
+  expectedCitizenship: 5,
+  L: 6,
+  U: 7,
+  contextId: 8,
+};
+
+// --- Utils ---
 function mustExist(path: string | undefined, label: string) {
   if (!path) throw new Error(`Missing required path for ${label}`);
   const abs = resolve(path);
   if (!existsSync(abs)) throw new Error(`File not found: ${abs} (${label})`);
   return abs;
 }
+
 function readJSON(path: string | undefined, label: string) {
   const abs = mustExist(path, label);
   return JSON.parse(readFileSync(abs, "utf8"));
 }
+
 function readVPFlexible(path: string | undefined): any {
   const abs = mustExist(path, "vp");
   const raw = readFileSync(abs, "utf8");
@@ -23,21 +40,13 @@ function readVPFlexible(path: string | undefined): any {
 }
 
 const JWT_REGEX = /[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+/;
-
-function findJwtInString(s: string | undefined | null): string | null {
-  if (typeof s !== "string") return null;
-  const m = s.match(JWT_REGEX);
-  return m ? m[0] : null;
-}
-
-function looksLikeJwt(tok: string): boolean {
-  const p = tok.split(".");
-  return p.length === 3 && p[1].length > 10;
-}
+const findJwtInString = (s: string | undefined | null) =>
+  typeof s === "string" ? s.match(JWT_REGEX)?.[0] ?? null : null;
+const looksLikeJwt = (tok: string) =>
+  tok.split(".").length === 3 && tok.split(".")[1].length > 10;
 
 function extractJwtFromVp(obj: any): string {
   if (typeof obj === "string" && looksLikeJwt(obj.trim())) return obj.trim();
-
   if (obj && typeof obj === "object") {
     if (typeof obj.jwt === "string" && looksLikeJwt(obj.jwt)) return obj.jwt;
     if (typeof obj.proof?.jwt === "string" && looksLikeJwt(obj.proof.jwt))
@@ -50,166 +59,150 @@ function extractJwtFromVp(obj: any): string {
   throw new Error("Can't find a valid JWT in VP");
 }
 
-function toVpJwt(vp: any): { jwt: string } {
-  if (typeof vp === "string") {
-    const direct = findJwtInString(vp);
-    if (direct) return { jwt: direct };
-
-    const t = vp.trim();
-    if (t.startsWith("{") || t.startsWith("[")) {
-      try {
-        const obj = JSON.parse(t);
-        return toVpJwt(obj);
-      } catch {}
-    }
-  }
-
-  if (vp && typeof vp === "object") {
-    if (typeof vp.jwt === "string") {
-      const fromJwtField =
-        findJwtInString(vp.jwt) ??
-        ((): string | null => {
-          const s = vp.jwt.trim();
-          if (s.startsWith("{") || s.startsWith("[")) {
-            try {
-              const inner = JSON.parse(s);
-              return (
-                findJwtInString(inner?.proof?.jwt) ??
-                (Array.isArray(inner?.proofs)
-                  ? findJwtInString(inner.proofs[0]?.jwt)
-                  : null)
-              );
-            } catch {}
-          }
-          return null;
-        })();
-      if (fromJwtField) return { jwt: fromJwtField };
-    }
-    const fromProof =
-      findJwtInString(vp?.proof?.jwt) ??
-      (Array.isArray(vp?.proofs) ? findJwtInString(vp.proofs[0]?.jwt) : null);
-    if (fromProof) return { jwt: fromProof };
-
-    const nested = toMaybeJwt(vp?.vp) ?? toMaybeJwt(vp?.presentation);
-    if (nested) return { jwt: nested };
-  }
-
-  throw new Error(
-    "VP doesn't contain a valid JWT (accept: {jwt}, string JWT, VP JSON with proof.jwt)."
-  );
-}
-
-function toMaybeJwt(x: any): string | null {
-  if (!x) return null;
-  if (typeof x === "string") return findJwtInString(x);
-  if (typeof x === "object") {
-    return (
-      findJwtInString(x?.jwt) ||
-      findJwtInString(x?.proof?.jwt) ||
-      (Array.isArray(x?.proofs) ? findJwtInString(x.proofs[0]?.jwt) : null)
-    );
-  }
-  return null;
-}
-
-function augment(ps: Json, audience: string, nonce: string) {
-  const out = { ...ps };
-  if (!("audience" in out)) out.audience = audience;
-  if (!("nonce" in out)) out.nonce = nonce;
-  return out;
-}
-const same = (a: any, b: any) => String(a) === String(b);
-
 function loadPack(
   proofPath: string | undefined,
-  pubPath: string | undefined,
-  labels: [string, string]
+  pubPath: string | undefined
 ): ProofPack {
-  const proof = readJSON(proofPath, labels[0]);
-  const publicSignals = readJSON(pubPath, labels[1]);
+  const proof = readJSON(proofPath, "agg-proof");
+  const publicSignals = readJSON(pubPath, "agg-public");
   return { proof, publicSignals };
 }
 
+function readChallengeFallback(): {
+  contextId?: string | number;
+  nonce?: string;
+} {
+  const p = resolve("rest/challenge.json");
+  if (!existsSync(p)) return {};
+  try {
+    const c = JSON.parse(readFileSync(p, "utf8"));
+    return {
+      contextId: c?.contextId,
+      nonce: c?.nonce,
+    };
+  } catch {
+    return {};
+  }
+}
+
+const same = (a: any, b: any) => String(a) === String(b);
+
+// --- CLI ---
 const program = new Command();
 program
   .name("build-payload")
   .description(
-    "Build { vp:{jwt}, zk:{age,citizenship,income}, audience, nonce }"
+    "Build payload pentru aggregate: { vp:{jwt}, contextId, [nonce], zk:{proof,publicSignals} }"
   )
   .requiredOption("--vp <path>", "Path la VP (.json sau .txt)")
-  .requiredOption("--audience <str>", "Audience (ex: service:demo)")
-  .requiredOption("--nonce <hex>", "Nonce (ex: 0x...)")
-  .requiredOption("--age-proof <path>", "age proof.json")
-  .requiredOption("--age-public <path>", "age public.json")
-  .requiredOption("--cit-proof <path>", "citizenship proof.json")
-  .requiredOption("--cit-public <path>", "citizenship public.json")
-  .requiredOption("--inc-proof <path>", "incomeRange proof.json")
-  .requiredOption("--inc-public <path>", "incomeRange public.json")
-  .option("--augment", "Inject audience/nonce in publicSignals", false)
+  .option("--context-id <id>", "Context ID pentru circuit")
+  .option(
+    "--nonce <hex>",
+    "Nonce pentru VP challenge (opțional, pentru securitate extra)"
+  )
+  .requiredOption("--agg-proof <path>", "aggregate proof.json")
+  .requiredOption("--agg-public <path>", "aggregate public.json")
   .option("--out <path>", "Fișier ieșire", "access_payload.json")
   .action((opts: any) => {
+    console.log("🔨 Construiesc payload-ul...\n");
+
+    // 1) VP → JWT
     const vpSrc = readVPFlexible(opts.vp);
     const vp = { jwt: extractJwtFromVp(vpSrc) };
+    console.log("✅ VP JWT extras");
 
-    const age = loadPack(opts.ageProof, opts.agePublic, [
-      "age-proof",
-      "age-public",
-    ]);
-    const cit = loadPack(opts.citProof, opts.citPublic, [
-      "cit-proof",
-      "cit-public",
-    ]);
-    const inc = loadPack(opts.incProof, opts.incPublic, [
-      "inc-proof",
-      "inc-public",
-    ]);
+    // 2) zk pack (aggregate)
+    const zk = loadPack(opts.aggProof, opts.aggPublic);
+    console.log("✅ ZK proof încărcat");
+    console.log(`   📊 publicSignals are ${zk.publicSignals.length} elemente`);
 
-    if (opts.augment) {
-      age.publicSignals = augment(age.publicSignals, opts.audience, opts.nonce);
-      cit.publicSignals = augment(cit.publicSignals, opts.audience, opts.nonce);
-      inc.publicSignals = augment(inc.publicSignals, opts.audience, opts.nonce);
-      console.warn("⚠️ Injected audience/nonce in publicSignals.");
+    // 3) contextId și nonce din flag sau challenge.json
+    const fallback = readChallengeFallback();
+    const contextId = opts.contextId ?? fallback.contextId;
+    const nonce = opts.nonce ?? fallback.nonce;
+
+    if (!contextId) {
+      throw new Error(
+        "contextId missing. Rulează `npm run nonce` sau trece-l ca --context-id <id>"
+      );
     }
 
-    const checkAud = (label: string, ps: Json) => {
-      if (!same(ps?.audience, opts.audience))
-        throw new Error(
-          `audience mismatch (${label}): expected "${opts.audience}", got ${ps?.audience}`
-        );
-    };
-    const checkNon = (label: string, ps: Json) => {
-      if (!same(ps?.nonce, opts.nonce))
-        throw new Error(
-          `nonce mismatch (${label}): expected "${opts.nonce}", got ${ps?.nonce}`
-        );
-    };
-    checkAud("age", age.publicSignals);
-    checkAud("citizenship", cit.publicSignals);
-    checkAud("income", inc.publicSignals);
-    checkNon("age", age.publicSignals);
-    checkNon("citizenship", cit.publicSignals);
-    checkNon("income", inc.publicSignals);
+    console.log(`\n📋 Challenge:`);
+    console.log(`   contextId: ${contextId} (obligatoriu pentru circuit)`);
+    if (nonce) {
+      console.log(`   nonce: ${nonce} (opțional, pentru securitate VP)`);
+    } else {
+      console.log(`   nonce: nu este setat (doar contextId)`);
+    }
 
-    for (const k of ["nullifier", "privHash"] as const) {
-      const av = age.publicSignals?.[k],
-        cv = cit.publicSignals?.[k],
-        iv = inc.publicSignals?.[k];
-      if (av !== undefined || cv !== undefined || iv !== undefined) {
-        if (!(same(av, cv) && same(av, iv))) {
-          throw new Error(`${k} mismatch between proofs`);
-        }
+    // 4) Verificare structură publicSignals
+    if (Array.isArray(zk.publicSignals)) {
+      console.log(`\n🔍 Verificare structură publicSignals...`);
+
+      const allValid = zk.publicSignals[IDX.allValid];
+      const privHash = zk.publicSignals[IDX.privHash];
+      const contextIdPS = zk.publicSignals[IDX.contextId];
+
+      console.log(`   [${IDX.allValid}] allValid: ${allValid}`);
+      console.log(`   [${IDX.privHash}] privHash: ${privHash}`);
+      console.log(
+        `   [${IDX.agePrivHash}] agePrivHash: ${
+          zk.publicSignals[IDX.agePrivHash]
+        }`
+      );
+      console.log(
+        `   [${IDX.citizenshipPrivHash}] citizenshipPrivHash: ${
+          zk.publicSignals[IDX.citizenshipPrivHash]
+        }`
+      );
+      console.log(
+        `   [${IDX.incomePrivHash}] incomePrivHash: ${
+          zk.publicSignals[IDX.incomePrivHash]
+        }`
+      );
+      console.log(
+        `   [${IDX.expectedCitizenship}] expectedCitizenship: ${
+          zk.publicSignals[IDX.expectedCitizenship]
+        }`
+      );
+      console.log(`   [${IDX.L}] L (minIncome): ${zk.publicSignals[IDX.L]}`);
+      console.log(`   [${IDX.U}] U (maxIncome): ${zk.publicSignals[IDX.U]}`);
+      console.log(`   [${IDX.contextId}] contextId: ${contextIdPS}`);
+
+      // Verifică allValid = 1
+      if (allValid !== "1" && allValid !== 1) {
+        throw new Error(`allValid trebuie să fie 1, dar este ${allValid}`);
+      }
+      console.log(`   ✅ allValid = 1 (proof valid)`);
+
+      // Verifică contextId
+      if (!same(contextIdPS, contextId)) {
+        console.warn(
+          `   ⚠️  contextId mismatch: expected "${contextId}", got "${contextIdPS}"`
+        );
+      } else {
+        console.log(`   ✅ contextId match`);
       }
     }
 
+    // 5) Scrie payload
     const outPath = resolve(opts.out ?? "access_payload.json");
-    const payload = {
+
+    // Construiește payload - include nonce doar dacă există
+    const payload: any = {
       vp,
-      audience: opts.audience,
-      nonce: opts.nonce,
-      zk: { age, citizenship: cit, income: inc },
+      contextId,
+      zk,
     };
+
+    if (nonce) {
+      payload.nonce = nonce;
+      console.log(`\n💡 Payload include și nonce pentru securitate extra VP`);
+    }
+
     writeFileSync(outPath, JSON.stringify(payload, null, 2), "utf8");
-    console.log(`✅ Payload saved in ${outPath}`);
+    console.log(`\n✅ Payload salvat în ${outPath}`);
+    console.log(`\n💡 Următorul pas: npm run present\n`);
   });
 
 program.parseAsync(process.argv);
