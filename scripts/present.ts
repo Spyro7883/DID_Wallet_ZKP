@@ -1,17 +1,39 @@
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
 const VERIFIER = process.env.VERIFIER || "http://localhost:5501";
-const PATH = process.argv[2] || "/secret";
+const PAYLOAD_PATH = process.argv[2] || "access_payload.json";
 
 (async () => {
-  if (!existsSync("token.txt")) {
-    console.error("❌ No token, run present first.");
+  if (!existsSync(PAYLOAD_PATH)) {
+    console.error(`No payload found: ${PAYLOAD_PATH}`);
     process.exit(1);
   }
-  const token = readFileSync("token.txt", "utf8").trim();
-  const r = await fetch(`${VERIFIER}${PATH}`, {
-    headers: { Authorization: `Bearer ${token}` },
+
+  const payload = JSON.parse(readFileSync(PAYLOAD_PATH, "utf8"));
+  console.log(`Send payload at ${VERIFIER}/present...\n`);
+
+  const res = await fetch(`${VERIFIER}/present`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
-  const text = await r.text();
-  console.log(text);
+
+  const text = await res.text();
+  console.log("Answer server:\n", text);
+
+  if (res.ok) {
+    try {
+      const data = JSON.parse(text);
+      if (data.token) {
+        writeFileSync("token.txt", data.token, "utf8");
+        console.log(`\n Token has been saved in token.txt (exp ${data.exp})`);
+      } else {
+        console.warn("Server has not returned a token");
+      }
+    } catch {
+      console.warn("Answer was not a valid JSON");
+    }
+  } else {
+    console.error("Verification has failed.");
+  }
 })();

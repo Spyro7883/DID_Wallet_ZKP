@@ -74,19 +74,46 @@ function loadPolicy(argv: ArgvMap): Policy {
       contextId: String(parsed.contextId),
     };
   }
+
   const L = argv["L"],
     U = argv["U"];
   if (!L || !U) {
     console.error(
-      "❌ Need policy: pass --policy=rest/policy.json OR both --L and --U."
+      "Need policy: pass --policy=rest/policy.json OR both --L and --U."
     );
     process.exit(1);
   }
+
+  let contextId = argv["contextId"];
+
+  if (!contextId) {
+    const challengePath = path.resolve("rest/challenge.json");
+    if (fs.existsSync(challengePath)) {
+      try {
+        const challenge = JSON.parse(fs.readFileSync(challengePath, "utf8"));
+        if (challenge.contextId) {
+          contextId = String(challenge.contextId);
+          console.log(`contextId read from challenge.json: ${contextId}`);
+        }
+      } catch (e) {
+        console.warn(`I can't read challenge.json: ${e}`);
+      }
+    }
+  }
+
+  if (!contextId) {
+    console.warn("contextId not found,use default: 1");
+    console.warn(
+      "Run 'npm run nonce' for generating a challenge with random contextId"
+    );
+    contextId = "1";
+  }
+
   return {
     expectedCitizenship: argv["expectedCitizenship"] ?? "1",
     L: String(L),
     U: String(U),
-    contextId: argv["contextId"] ?? "1",
+    contextId: contextId,
   };
 }
 
@@ -196,7 +223,7 @@ function ensureDir(p: string) {
     if (v < 0n || v >= max)
       throw new Error(`${name}=${v} exceeds ${bits} bits`);
   }
-  ensureFits(citizenship, 16, "citizenship"); // adaptează la circuit
+  ensureFits(citizenship, 16, "citizenship");
   ensureFits(income, 32, "income");
   ensureFits(age, 8, "age");
 
@@ -212,7 +239,7 @@ function ensureDir(p: string) {
   if (!(income! >= L && income! < U)) fails.push(`income∉[${L},${U})`);
 
   if (fails.length) {
-    console.error("❌ Eligibility failed:", fails.join(", "));
+    console.error("Eligibility failed:", fails.join(", "));
     process.exit(2);
   }
 

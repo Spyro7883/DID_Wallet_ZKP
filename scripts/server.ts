@@ -1,22 +1,17 @@
-// server.ts
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
 import { readFileSync } from "node:fs";
-// @ts-ignore - snarkjs nu are declarații TypeScript oficiale
 import * as snarkjs from "snarkjs";
 
 const app = express();
 const PORT = 5501;
 
-// === CONFIG ===
 const CIRCUIT = process.env.CIRCUIT || "aggregate";
 const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
 
-// Încarcă VK o singură dată
 const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
 
-// === Helpers ===
 app.use(cors());
 app.use(express.json());
 
@@ -44,7 +39,6 @@ function readSignal(ps: any[] | Record<string, any>, key: keyof typeof IDX) {
   return (ps as any)?.[key];
 }
 
-// token store cu TTL (sec)
 const TOKENS = new Map<string, number>();
 const TTL_SECONDS = 600;
 
@@ -66,7 +60,6 @@ function isValidToken(tok?: string) {
   return true;
 }
 
-// Cleanup tokens expirate
 setInterval(() => {
   const now = Math.floor(Date.now() / 1000);
   let cleaned = 0;
@@ -77,45 +70,39 @@ setInterval(() => {
     }
   }
   if (cleaned > 0) {
-    console.log(`🗑️  Cleaned ${cleaned} expired token(s)`);
+    console.log(` Cleaned ${cleaned} expired token(s)`);
   }
-}, 60000); // La fiecare minut
+}, 60000);
 
-// === Routes ===
 app.post("/present", async (req, res) => {
-  console.log("\n📩 Payload received @/present");
+  console.log("\n Payload received @/present");
   console.log(JSON.stringify(req.body, null, 2));
 
   try {
     const { vp, contextId, nonce, zk } = req.body || {};
 
-    // 1) Verificări de bază
     if (contextId === undefined || contextId === null) {
-      throw new Error("contextId lipsește");
+      throw new Error("contextId is missing");
     }
     if (!isPack(zk)) {
       throw new Error("zk pack invalid (proof/publicSignals)");
     }
 
-    // Log nonce dacă există (opțional)
     if (nonce) {
-      console.log(`   🔐 Nonce primit: ${nonce} (securitate extra VP)`);
+      console.log(`Nonce received: ${nonce} (extra security VP)`);
     }
 
-    console.log("\n🔍 Verificare ZK proof...");
+    console.log("\n Verification ZK proof...");
 
-    // 2) Verifică proof la nivel criptografic
     const publicSignalsForVerify = Array.isArray(zk.publicSignals)
       ? zk.publicSignals
       : (() => {
           throw new Error(
-            "publicSignals trebuie să fie array (din public.json) pentru verificare groth16."
+            "publicSignals has to be an array (from public.json) for groth16 verify."
           );
         })();
 
-    console.log(
-      `   📊 publicSignals: ${publicSignalsForVerify.length} elemente`
-    );
+    console.log(`publicSignals: ${publicSignalsForVerify.length} elements`);
 
     const ok = await snarkjs.groth16.verify(
       VERIFICATION_KEY,
@@ -124,13 +111,12 @@ app.post("/present", async (req, res) => {
     );
 
     if (!ok) {
-      console.error("❌ ZK proof verification failed!");
+      console.error("ZK proof verification failed!");
       throw new Error("zk verification failed");
     }
-    console.log("   ✅ ZK proof valid (verificare criptografică OK)");
+    console.log("valid ZK proof");
 
-    // 3) Verifică structura publicSignals
-    console.log("\n🔍 Verificare structură publicSignals...");
+    console.log("\n Verificare structură publicSignals...");
 
     const allValid = readSignal(zk.publicSignals, "allValid");
     const privHash = readSignal(zk.publicSignals, "privHash");
@@ -158,27 +144,21 @@ app.post("/present", async (req, res) => {
     console.log(
       `   [${IDX.expectedCitizenship}] expectedCitizenship: ${expectedCitizenship}`
     );
-    console.log(`   [${IDX.L}] L (minIncome): ${L}`);
-    console.log(`   [${IDX.U}] U (maxIncome): ${U}`);
-    console.log(`   [${IDX.contextId}] contextId: ${contextIdPS}`);
+    console.log(` [${IDX.L}] L (minIncome): ${L}`);
+    console.log(` [${IDX.U}] U (maxIncome): ${U}`);
+    console.log(` [${IDX.contextId}] contextId: ${contextIdPS}`);
 
-    // 4) Verificări esențiale
     if (allValid === undefined) {
-      throw new Error("allValid lipsește din publicSignals");
+      throw new Error("allValid is missing from publicSignals");
     }
 
     if (allValid !== "1" && allValid !== 1) {
-      throw new Error(
-        `allValid trebuie să fie 1 (proof valid), dar este ${allValid}`
-      );
+      throw new Error(`allValid has to be 1, but it's ${allValid}`);
     }
-    console.log(
-      "   ✅ allValid = 1 (toate verificările din circuit au trecut)"
-    );
+    console.log("allValid = 1 (all verifications from circuit have passed)");
 
-    // 5) Verifică contextId
     if (contextIdPS === undefined) {
-      throw new Error("contextId lipsește din publicSignals");
+      throw new Error("contextId is missing from publicSignals");
     }
 
     if (!same(contextIdPS, contextId)) {
@@ -186,27 +166,24 @@ app.post("/present", async (req, res) => {
         `contextId mismatch: expected "${contextId}", got "${contextIdPS}"`
       );
     }
-    console.log("   ✅ contextId match");
+    console.log("contextId match");
 
-    // 6) Verifică că toate hash-urile există (privHash este commitment-ul global)
     if (!privHash || !agePrivHash || !citizenshipPrivHash || !incomePrivHash) {
-      throw new Error("Unul sau mai multe hash-uri lipsesc din publicSignals");
+      throw new Error("One or more hashes are missing from publicSignals");
     }
-    console.log("   ✅ Toate hash-urile prezente");
+    console.log("All present hashes");
 
-    // 7) Log parametrii verificați
-    console.log("\n📋 Parametri verificați:");
-    console.log(`   ✓ Citizenship: ${expectedCitizenship}`);
-    console.log(`   ✓ Income range: [${L}, ${U}]`);
-    console.log(`   ✓ Context: ${contextId}`);
+    console.log("\n Parameters verificated:");
+    console.log(`Citizenship: ${expectedCitizenship}`);
+    console.log(`Income range: [${L}, ${U}]`);
+    console.log(`Context: ${contextId}`);
 
-    // 8) Emite token de acces
     const { token, exp } = issueToken();
     const expDate = new Date(exp * 1000).toISOString();
 
-    console.log(`\n✅ Valid payload!`);
-    console.log(`   🎫 Token emis: ${token.substring(0, 20)}...`);
-    console.log(`   ⏰ Expiră la: ${expDate}\n`);
+    console.log(`\n Valid payload!`);
+    console.log(`Token issued: ${token.substring(0, 20)}...`);
+    console.log(`Expires at: ${expDate}\n`);
 
     res.json({
       token,
@@ -220,7 +197,7 @@ app.post("/present", async (req, res) => {
       },
     });
   } catch (e: any) {
-    console.error("\n❌ Error @/present:", e.message || e);
+    console.error("\n Error @/present:", e.message || e);
     res.status(400).json({ error: String(e?.message ?? e) });
   }
 });
@@ -230,25 +207,23 @@ app.get("/secret", (req, res) => {
   const token = authHeader?.split(" ")[1];
 
   if (!token) {
-    console.log("❌ /secret: No token provided");
+    console.log("/secret: No token provided");
     return res.status(401).json({
-      error: "Token lipsă",
-      hint: "Folosește: Authorization: Bearer <token>",
+      error: "Token is missing",
+      hint: "Use: Authorization: Bearer <token>",
     });
   }
 
   if (!isValidToken(token)) {
-    console.log(
-      `❌ /secret: Invalid/expired token: ${token.substring(0, 20)}...`
-    );
+    console.log(`/secret: Invalid/expired token: ${token.substring(0, 20)}...`);
     return res.status(401).json({ error: "Invalid/expired token" });
   }
 
   console.log(
-    `✅ /secret: Access granted for token: ${token.substring(0, 20)}...`
+    `/secret: Access granted for token: ${token.substring(0, 20)}...`
   );
   res.json({
-    message: "🎉 Access granted to protected resource!",
+    message: "Access granted to protected resource!",
     secret: {
       data: "This is the confidential information",
       level: "restricted",
@@ -267,7 +242,7 @@ app.get("/health", (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`\n🚀 Verifier running on http://localhost:${PORT}`);
-  console.log(`📍 Circuit: ${CIRCUIT}`);
-  console.log(`🔑 Verification key: ${VK_PATH}`);
+  console.log(`\nVerifier running on http://localhost:${PORT}`);
+  console.log(`Circuit: ${CIRCUIT}`);
+  console.log(`Verification key: ${VK_PATH}`);
 });

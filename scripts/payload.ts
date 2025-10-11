@@ -1,4 +1,3 @@
-// scripts/payload.ts
 import { Command } from "commander";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve, extname } from "node:path";
@@ -6,7 +5,6 @@ import { resolve, extname } from "node:path";
 type Json = Record<string, any>;
 type ProofPack = { proof: any; publicSignals: any };
 
-// Ordinea publicSignals în aggregate.circom
 const IDX = {
   allValid: 0,
   privHash: 1,
@@ -19,7 +17,6 @@ const IDX = {
   contextId: 8,
 };
 
-// --- Utils ---
 function mustExist(path: string | undefined, label: string) {
   if (!path) throw new Error(`Missing required path for ${label}`);
   const abs = resolve(path);
@@ -87,57 +84,47 @@ function readChallengeFallback(): {
 
 const same = (a: any, b: any) => String(a) === String(b);
 
-// --- CLI ---
 const program = new Command();
 program
   .name("build-payload")
   .description(
-    "Build payload pentru aggregate: { vp:{jwt}, contextId, [nonce], zk:{proof,publicSignals} }"
+    "Build payload for aggregate: { vp:{jwt}, contextId, [nonce], zk:{proof,publicSignals} }"
   )
-  .requiredOption("--vp <path>", "Path la VP (.json sau .txt)")
-  .option("--context-id <id>", "Context ID pentru circuit")
-  .option(
-    "--nonce <hex>",
-    "Nonce pentru VP challenge (opțional, pentru securitate extra)"
-  )
+  .requiredOption("--vp <path>", "Path at VP (.json sau .txt)")
+  .option("--context-id <id>", "Context ID for circuit")
+  .option("--nonce <hex>", "Nonce for VP")
   .requiredOption("--agg-proof <path>", "aggregate proof.json")
   .requiredOption("--agg-public <path>", "aggregate public.json")
   .option("--out <path>", "Fișier ieșire", "access_payload.json")
   .action((opts: any) => {
-    console.log("🔨 Construiesc payload-ul...\n");
+    console.log("🔨 Build payload-ul...\n");
 
-    // 1) VP → JWT
     const vpSrc = readVPFlexible(opts.vp);
     const vp = { jwt: extractJwtFromVp(vpSrc) };
-    console.log("✅ VP JWT extras");
+    console.log("VP JWT extracted");
 
-    // 2) zk pack (aggregate)
     const zk = loadPack(opts.aggProof, opts.aggPublic);
-    console.log("✅ ZK proof încărcat");
-    console.log(`   📊 publicSignals are ${zk.publicSignals.length} elemente`);
+    console.log("ZK proof loaded");
+    console.log(`publicSignals has ${zk.publicSignals.length} elements`);
 
-    // 3) contextId și nonce din flag sau challenge.json
     const fallback = readChallengeFallback();
     const contextId = opts.contextId ?? fallback.contextId;
     const nonce = opts.nonce ?? fallback.nonce;
 
     if (!contextId) {
-      throw new Error(
-        "contextId missing. Rulează `npm run nonce` sau trece-l ca --context-id <id>"
-      );
+      throw new Error("contextId missing. Run `npm run nonce`");
     }
 
-    console.log(`\n📋 Challenge:`);
-    console.log(`   contextId: ${contextId} (obligatoriu pentru circuit)`);
+    console.log(`\n Challenge:`);
+    console.log(`   contextId: ${contextId}`);
     if (nonce) {
-      console.log(`   nonce: ${nonce} (opțional, pentru securitate VP)`);
+      console.log(`   nonce: ${nonce} optional`);
     } else {
-      console.log(`   nonce: nu este setat (doar contextId)`);
+      console.log(`   nonce: has not been created`);
     }
 
-    // 4) Verificare structură publicSignals
     if (Array.isArray(zk.publicSignals)) {
-      console.log(`\n🔍 Verificare structură publicSignals...`);
+      console.log(`\n🔍 Verify struct publicSignals...`);
 
       const allValid = zk.publicSignals[IDX.allValid];
       const privHash = zk.publicSignals[IDX.privHash];
@@ -169,26 +156,22 @@ program
       console.log(`   [${IDX.U}] U (maxIncome): ${zk.publicSignals[IDX.U]}`);
       console.log(`   [${IDX.contextId}] contextId: ${contextIdPS}`);
 
-      // Verifică allValid = 1
       if (allValid !== "1" && allValid !== 1) {
-        throw new Error(`allValid trebuie să fie 1, dar este ${allValid}`);
+        throw new Error(`allValid has to be 1, but it's ${allValid}`);
       }
-      console.log(`   ✅ allValid = 1 (proof valid)`);
+      console.log(` allValid = 1 (validated proof)`);
 
-      // Verifică contextId
       if (!same(contextIdPS, contextId)) {
         console.warn(
-          `   ⚠️  contextId mismatch: expected "${contextId}", got "${contextIdPS}"`
+          `contextId mismatch: expected "${contextId}", got "${contextIdPS}"`
         );
       } else {
-        console.log(`   ✅ contextId match`);
+        console.log(`contextId match`);
       }
     }
 
-    // 5) Scrie payload
     const outPath = resolve(opts.out ?? "access_payload.json");
 
-    // Construiește payload - include nonce doar dacă există
     const payload: any = {
       vp,
       contextId,
@@ -197,12 +180,12 @@ program
 
     if (nonce) {
       payload.nonce = nonce;
-      console.log(`\n💡 Payload include și nonce pentru securitate extra VP`);
+      console.log(`\n Include payload and nonce for extra VP security`);
     }
 
     writeFileSync(outPath, JSON.stringify(payload, null, 2), "utf8");
-    console.log(`\n✅ Payload salvat în ${outPath}`);
-    console.log(`\n💡 Următorul pas: npm run present\n`);
+    console.log(`\n Saved payload in ${outPath}`);
+    console.log(`\n Next step: npm run present\n`);
   });
 
 program.parseAsync(process.argv);
