@@ -46,6 +46,10 @@ npx hardhat ignition deploy ignition/modules/VerifierModule.ts --network sepolia
 
 npx hardhat run scripts/verify.ts --network sepolia
 
+ZKINPUT:
+
+EXTRA_ARGS="--L=8000 --U=17000 --expectedCitizenship=RO" npm run zk:input
+
 ### Payload command
 
 npm run payload -- --vp rest/vp_demo.json --audience service:demo --nonce 0xYourNonceAddress --age-proof build/age/proof.json --age-public build/age/public.json --cit-proof build/citizenship/proof.json --cit-public build/citizenship/public.json --inc-proof build/incomeRange/proof.json --inc-public build/incomeRange/public.json --augment --out your_payload.json
