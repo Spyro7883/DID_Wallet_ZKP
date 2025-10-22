@@ -12,5 +12,5 @@ cache
 typechain-types
 ignition/deployments
 test
-contracts
+contracts/aggregate
 types

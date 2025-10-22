@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import crypto from "crypto";
 import { readFileSync } from "node:fs";
+import { keccak256, toUtf8Bytes } from "ethers";
 import * as snarkjs from "snarkjs";
 
 const app = express();
@@ -16,6 +17,22 @@ app.use(cors());
 app.use(express.json());
 
 type ProofPack = { proof: any; publicSignals: any[] | Record<string, any> };
+
+type ZkContext = {
+  contextId: string;
+  expectedCitizenship: string;
+  L: string | number;
+  U: string | number;
+  expiresAt: number;
+};
+
+const REQUESTS = new Map<string, { toCommit: string; ctx: ZkContext }>();
+
+function keccakDidSalt(did: string, saltHex: string) {
+  const salt = Buffer.from(saltHex.replace(/^0x/, ""), "hex");
+  const bytes = new Uint8Array([...toUtf8Bytes(did), ...salt]);
+  return keccak256(bytes);
+}
 
 const isPack = (x: any): x is ProofPack =>
   x && typeof x === "object" && x.proof && x.publicSignals;
@@ -200,6 +217,43 @@ app.post("/present", async (req, res) => {
     console.error("\n Error @/present:", e.message || e);
     res.status(400).json({ error: String(e?.message ?? e) });
   }
+});
+
+app.post("/requests/register", (req, res) => {
+  const { challengeHash, toCommit, context } = req.body || {};
+  if (!challengeHash || !toCommit || !context) {
+    return res.status(400).json({ error: "bad_request" });
+  }
+  const ctx: ZkContext = {
+    contextId: String(context.contextId),
+    expectedCitizenship: String(context.expectedCitizenship ?? ""),
+    L: String(context.L ?? "0"),
+    U: String(context.U ?? "0"),
+    expiresAt: Number(context.expiresAt ?? Math.floor(Date.now() / 1000) + 600),
+  };
+  REQUESTS.set(String(challengeHash).toLowerCase(), {
+    toCommit: String(toCommit).toLowerCase(),
+    ctx,
+  });
+  return res.json({ ok: true });
+});
+
+app.post("/requests/claim", (req, res) => {
+  const { challengeHash, did, salt } = req.body || {};
+  if (!challengeHash || !did || !salt) {
+    return res.status(400).json({ error: "bad_request" });
+  }
+  const rec = REQUESTS.get(String(challengeHash).toLowerCase());
+  if (!rec) return res.status(404).json({ error: "unknown_request" });
+
+  const computed = keccakDidSalt(String(did), String(salt)).toLowerCase();
+  if (computed !== rec.toCommit) {
+    return res.status(400).json({ error: "commit_mismatch" });
+  }
+  if (Math.floor(Date.now() / 1000) > rec.ctx.expiresAt) {
+    return res.status(400).json({ error: "expired" });
+  }
+  return res.json({ ok: true, context: rec.ctx });
 });
 
 app.get("/secret", (req, res) => {
