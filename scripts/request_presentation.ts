@@ -14,8 +14,8 @@ import { SIGNALS_ABI } from "./signals-abi.ts";
   const DID = norm(process.argv[2]) ?? process.env.HOLDER_DID;
   const SALT_HEX = norm(process.argv[3]) ?? process.env.SALT;
   const CIT = norm(process.argv[4]) ?? process.env.CITIZENSHIP ?? "RO";
-  const L = norm(process.argv[5]) ?? process.env.L ?? "2000";
-  const U = norm(process.argv[6]) ?? process.env.U ?? "1000";
+  const L = norm(process.argv[5]) ?? process.env.L ?? "8000";
+  const U = norm(process.argv[6]) ?? process.env.U ?? "15000";
   const base = process.env.SERVER_BASE || "http://localhost:5501";
 
   if (!DID || !SALT_HEX)

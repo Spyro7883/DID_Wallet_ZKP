@@ -1,3 +1,4 @@
+// scripts/generate_input.ts
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -27,102 +28,27 @@ interface VPShape {
   [k: string]: unknown;
 }
 
-interface Policy {
-  expectedCitizenship: string;
-  L: string;
-  U: string;
-  contextId: string;
-}
 type CircuitName = "aggregate" | "age" | "citizenship" | "incomeRange";
-interface ArgvMap {
-  [k: string]: string | undefined;
-}
+type ArgvMap = Record<string, string>;
 
-function parseArgs(): { circuit: CircuitName; vpPath: string; argv: ArgvMap } {
-  const [, , c, rel] = process.argv;
-  if (!c || !rel) {
-    console.error(
-      "Usage: tsx scripts/generate_input.ts <circuit> <vpPath> [--policy=rest/policy.json | --L=... --U=... --expectedCitizenship=... --contextId=...] [--anchors=1]"
-    );
-    process.exit(1);
-  }
-  const circuit = c as CircuitName;
-  const vpPath = path.isAbsolute(rel) ? rel : path.resolve(rel);
-  const argv: ArgvMap = {};
-  for (const token of process.argv.slice(4)) {
-    if (!token.startsWith("--")) continue;
-    const [k, v] = token.slice(2).split("=");
-    argv[k] = v ?? "1";
-  }
-  return { circuit, vpPath, argv };
-}
-
-function loadPolicy(argv: ArgvMap): Policy {
-  const policyPath = argv["policy"];
-  if (policyPath) {
-    const p = path.isAbsolute(policyPath)
-      ? policyPath
-      : path.resolve(policyPath);
-    const parsed = JSON.parse(fs.readFileSync(p, "utf8"));
-    for (const k of ["expectedCitizenship", "L", "U", "contextId"]) {
-      if (!(k in parsed)) throw new Error(`Policy file missing key "${k}"`);
-    }
-    return {
-      expectedCitizenship: String(parsed.expectedCitizenship),
-      L: String(parsed.L),
-      U: String(parsed.U),
-      contextId: String(parsed.contextId),
-    };
-  }
-
-  const L = argv["L"],
-    U = argv["U"];
-  if (!L || !U) {
-    console.error(
-      "Need policy: pass --policy=rest/policy.json OR both --L and --U."
-    );
-    process.exit(1);
-  }
-
-  let contextId = argv["contextId"];
-
-  if (!contextId) {
-    const challengePath = path.resolve("rest/challenge.json");
-    if (fs.existsSync(challengePath)) {
-      try {
-        const challenge = JSON.parse(fs.readFileSync(challengePath, "utf8"));
-        if (challenge.contextId) {
-          contextId = String(challenge.contextId);
-          console.log(`contextId read from challenge.json: ${contextId}`);
-        }
-      } catch (e) {
-        console.warn(`I can't read challenge.json: ${e}`);
-      }
+function parseFlags(argv: string[]): ArgvMap {
+  const out: ArgvMap = {};
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (!t.startsWith("--")) continue;
+    const eq = t.indexOf("=");
+    if (eq >= 0) {
+      const k = t.slice(2, eq);
+      const v = t.slice(eq + 1);
+      out[k] = v;
+    } else {
+      const k = t.slice(2);
+      const v =
+        argv[i + 1] && !argv[i + 1].startsWith("--") ? (i++, argv[i]) : "1";
+      out[k] = v;
     }
   }
-
-  if (!contextId) {
-    console.warn("contextId not found,use default: 1");
-    console.warn(
-      "Run 'npm run nonce' for generating a challenge with random contextId"
-    );
-    contextId = "1";
-  }
-
-  return {
-    expectedCitizenship: argv["expectedCitizenship"] ?? "1",
-    L: String(L),
-    U: String(U),
-    contextId: contextId,
-  };
-}
-
-function getVcJwt(vcItem: VCShape): string {
-  if (typeof vcItem === "string") return vcItem;
-  const jwt = vcItem?.proof?.jwt;
-  if (!jwt)
-    throw new Error("VC item missing proof.jwt (or isn’t a JWT string).");
-  return jwt;
+  return out;
 }
 
 function assertDefined<T>(v: T, name: string): asserts v is NonNullable<T> {
@@ -136,14 +62,77 @@ function ensureDir(p: string) {
 }
 
 (function main() {
-  const { circuit, vpPath, argv } = parseArgs();
-  const vp: VPShape = JSON.parse(fs.readFileSync(vpPath, "utf8"));
-  const policy = loadPolicy(argv);
-  const wantAnchors = argv["anchors"] === "1";
-  const expectedCitizenshipNum = alpha2ToNumeric(
-    policy.expectedCitizenship
-  ).toString();
+  // poziționale: <circuit> <vpPath>
+  const [, , c, rel, ...rest] = process.argv;
+  if (!c || !rel) {
+    console.error(
+      "Usage: tsx scripts/generate_input.ts <circuit> <vpPath> [--contextId <hex>|--policy rest/policy.json] --cit <RO> --L <min> --U <max> [--anchors 1]"
+    );
+    process.exit(1);
+  }
+  const circuit = c as CircuitName;
+  const vpPath = path.isAbsolute(rel) ? rel : path.resolve(rel);
 
+  const flags = parseFlags(rest);
+
+  // 1) policy / parametri de verificare
+  let contextId =
+    flags.contextId ||
+    process.env.CONTEXT_ID ||
+    (() => {
+      const p = path.resolve("rest/challenge.json");
+      if (fs.existsSync(p)) {
+        try {
+          const j = JSON.parse(fs.readFileSync(p, "utf8"));
+          if (j?.contextId) return String(j.contextId);
+        } catch {}
+      }
+      return "";
+    })();
+
+  const cit = (flags.cit || flags.citizenship || process.env.CITIZENSHIP || "")
+    .toUpperCase()
+    .trim();
+  const Ls = flags.L || process.env.L;
+  const Us = flags.U || process.env.U;
+
+  // dacă a fost dat un fișier policy, îl încărcăm (poate suprascrie contextId/L/U/cit)
+  if (flags.policy) {
+    const p = path.isAbsolute(flags.policy)
+      ? flags.policy
+      : path.resolve(flags.policy);
+    const pol = JSON.parse(fs.readFileSync(p, "utf8"));
+    contextId = pol.contextId ?? contextId;
+    // acceptăm atât expectedCitizenship cât și cit
+    if (pol.expectedCitizenship || pol.cit) pol.expectedCitizenship ??= pol.cit;
+    if (pol.expectedCitizenship) (flags as any).cit = pol.expectedCitizenship;
+    if (pol.L !== undefined) (flags as any).L = String(pol.L);
+    if (pol.U !== undefined) (flags as any).U = String(pol.U);
+  }
+
+  assertDefined(
+    cit || flags.cit || flags.citizenship,
+    "citizenship (--cit RO)"
+  );
+  assertDefined(Ls || flags.L, "L (--L 2000)");
+  assertDefined(Us || flags.U, "U (--U 10000)");
+  if (!contextId) {
+    throw new Error(
+      "Missing contextId. Pass --contextId <hex> or provide rest/challenge.json or set CONTEXT_ID."
+    );
+  }
+
+  const expectedCitizenshipNum = alpha2ToNumeric(
+    (flags.cit || flags.citizenship || cit)!
+  ).toString();
+  const L = BigInt(flags.L || Ls!);
+  const U = BigInt(flags.U || Us!);
+  if (!(L < U)) throw new Error("Policy invalid: L must be < U");
+
+  const wantAnchors = (flags.anchors ?? "0") === "1";
+
+  // 2) încărcăm VP și extragem atributele
+  const vp: VPShape = JSON.parse(fs.readFileSync(vpPath, "utf8"));
   const vcs = vp.verifiableCredential ?? [];
   if (!Array.isArray(vcs) || vcs.length === 0) {
     throw new Error("VP malformed: verifiableCredential[] missing");
@@ -159,6 +148,14 @@ function ensureDir(p: string) {
   let credHash_age = "",
     credHash_inc = "",
     credHash_cit = "";
+
+  function getVcJwt(vcItem: VCShape): string {
+    if (typeof vcItem === "string") return vcItem;
+    const jwt = vcItem?.proof?.jwt;
+    if (!jwt)
+      throw new Error("VC item missing proof.jwt (or isn’t a JWT string).");
+    return jwt;
+  }
 
   for (const item of vcs) {
     const jwt = getVcJwt(item);
@@ -200,7 +197,7 @@ function ensureDir(p: string) {
       if (wantAnchors) credHash_inc = keccak256(toUtf8Bytes(jwt));
     }
     if (cs.citizenship !== undefined && citizenship === undefined) {
-      citizenship = alpha2ToNumeric(cs.citizenship);
+      citizenship = alpha2ToNumeric(String(cs.citizenship));
       if (wantAnchors) credHash_cit = keccak256(toUtf8Bytes(jwt));
     }
   }
@@ -210,7 +207,7 @@ function ensureDir(p: string) {
     if (!age && cs.age !== undefined) age = BigInt(String(cs.age));
     if (!income && cs.income !== undefined) income = BigInt(String(cs.income));
     if (!citizenship && cs.citizenship !== undefined)
-      citizenship = alpha2ToNumeric(cs.citizenship);
+      citizenship = alpha2ToNumeric(String(cs.citizenship));
   }
 
   assertDefined(age, "age");
@@ -218,6 +215,7 @@ function ensureDir(p: string) {
   assertDefined(citizenship, "citizenship");
   assertDefined(didHash, "didHash");
 
+  // 3) validări de dimensiune (circuit constraints)
   function ensureFits(v: bigint, bits: number, name: string) {
     const max = 1n << BigInt(bits);
     if (v < 0n || v >= max)
@@ -227,55 +225,43 @@ function ensureDir(p: string) {
   ensureFits(income, 32, "income");
   ensureFits(age, 8, "age");
 
+  // 4) pregătim inputul pentru circuit
   const salt = BigInt("0x" + crypto.randomBytes(31).toString("hex"));
-  const L = BigInt(policy.L);
-  const U = BigInt(policy.U);
-  if (!(L < U)) throw new Error("Policy invalid: L must be < U");
-
-  const fails: string[] = [];
-  if (citizenship!.toString() !== expectedCitizenshipNum)
-    fails.push("citizenship≠expected");
-  if (age! < 18n) fails.push("age<18");
-  if (!(income! >= L && income! < U)) fails.push(`income∉[${L},${U})`);
-
-  if (fails.length) {
-    console.error("Eligibility failed:", fails.join(", "));
-    process.exit(2);
-  }
-
-  const lc = circuit.toLowerCase();
-  const baseOut: Record<string, string> = {};
 
   let input: Record<string, string>;
-  if (lc === "aggregate") {
-    input = {
-      ...baseOut,
-      age: age.toString(),
-      income: income.toString(),
-      citizenship: citizenship.toString(),
-      salt: salt.toString(),
-      expectedCitizenship: expectedCitizenshipNum,
-      L: L.toString(),
-      U: U.toString(),
-      contextId: BigInt(policy.contextId).toString(),
-    };
-  } else if (lc === "age") {
-    input = { age: age.toString(), salt: salt.toString() };
-  } else if (lc === "citizenship") {
-    input = {
-      citizenship: citizenship.toString(),
-      salt: salt.toString(),
-      expectedCitizenship: policy.expectedCitizenship,
-    };
-  } else if (lc === "incomerange") {
-    input = {
-      income: income.toString(),
-      salt: salt.toString(),
-      L: L.toString(),
-      U: U.toString(),
-    };
-  } else {
-    throw new Error(`Unknown circuit: ${circuit}`);
+  switch (circuit.toLowerCase()) {
+    case "aggregate":
+      input = {
+        age: age.toString(),
+        income: income.toString(),
+        citizenship: citizenship.toString(),
+        salt: salt.toString(),
+        expectedCitizenship: expectedCitizenshipNum,
+        L: L.toString(),
+        U: U.toString(),
+        contextId: BigInt(contextId).toString(),
+      };
+      break;
+    case "age":
+      input = { age: age.toString(), salt: salt.toString() };
+      break;
+    case "citizenship":
+      input = {
+        citizenship: citizenship.toString(),
+        salt: salt.toString(),
+        expectedCitizenship: expectedCitizenshipNum,
+      };
+      break;
+    case "incomerange":
+      input = {
+        income: income.toString(),
+        salt: salt.toString(),
+        L: L.toString(),
+        U: U.toString(),
+      };
+      break;
+    default:
+      throw new Error(`Unknown circuit: ${circuit}`);
   }
 
   if (wantAnchors) {

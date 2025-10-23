@@ -4,6 +4,13 @@ import crypto from "crypto";
 import { readFileSync } from "node:fs";
 import { keccak256, toUtf8Bytes } from "ethers";
 import * as snarkjs from "snarkjs";
+import "reflect-metadata";
+import { setupAgent, type TAgent } from "./agent.ts";
+import { base64url } from "jose";
+import * as ed from "@noble/ed25519";
+import * as secp from "@noble/secp256k1";
+import { sha256 } from "@noble/hashes/sha2.js";
+import bs58 from "bs58";
 
 const app = express();
 const PORT = 5501;
@@ -59,6 +66,22 @@ function readSignal(ps: any[] | Record<string, any>, key: keyof typeof IDX) {
 const TOKENS = new Map<string, number>();
 const TTL_SECONDS = 600;
 
+let agent: TAgent;
+let ISSUER_DID = "";
+
+// pairing (off-chain)
+const CHALLENGES = new Map<
+  string,
+  { id: string; challenge: string; exp: number }
+>();
+const CONNECTIONS = new Map<
+  string,
+  { holderDid: string; token: string; exp: number }
+>();
+
+const rid = (n = 16) => crypto.randomBytes(n).toString("hex");
+const now = () => Date.now();
+
 function issueToken(): { token: string; exp: number } {
   const token = "tk_" + crypto.randomBytes(16).toString("hex");
   const exp = Math.floor(Date.now() / 1000) + TTL_SECONDS;
@@ -76,6 +99,32 @@ function isValidToken(tok?: string) {
   }
   return true;
 }
+
+function bearer(req: any) {
+  const h = req.headers.authorization || req.headers.Authorization;
+  if (!h) return null;
+  const m = /Bearer\s+(.+)/i.exec(String(h));
+  return m ? m[1] : null;
+}
+
+async function ensureIssuerDid() {
+  const ids = await agent.didManagerFind();
+  let issuer = ids.find((i: any) => i.alias === "issuer");
+  if (!issuer) {
+    // preferă did:key pentru simplitate; poți schimba în did:cheqd / did:ethr
+    issuer = await agent.didManagerCreate({
+      provider: "did:key",
+      kms: "local",
+      alias: "issuer",
+    });
+  }
+  ISSUER_DID = issuer.did;
+}
+
+(async () => {
+  agent = await setupAgent();
+  await ensureIssuerDid();
+})();
 
 setInterval(() => {
   const now = Math.floor(Date.now() / 1000);
@@ -293,6 +342,87 @@ app.get("/health", (req, res) => {
     activeTokens: TOKENS.size,
     timestamp: new Date().toISOString(),
   });
+});
+
+app.get("/connect/challenge", (_req, res) => {
+  const id = rid(8);
+  const challenge = rid(16);
+  const exp = now() + 5 * 60_000;
+  CHALLENGES.set(id, { id, challenge, exp });
+  res.json({ id, challenge, issuerDid: ISSUER_DID, expiresAt: exp });
+});
+
+app.post("/connect/confirm", async (req, res) => {
+  try {
+    const { id, holderDid, jws } = req.body || {};
+    const ch = CHALLENGES.get(String(id));
+    if (!ch || ch.exp < now())
+      return res.status(400).json({ error: "challenge_expired" });
+
+    const ver = await agent.verifyJWS({ jws });
+    const payload = JSON.parse(
+      Buffer.from(ver.payload, "base64url").toString("utf8")
+    );
+    if (payload.id !== id || payload.challenge !== ch.challenge) {
+      return res.status(400).json({ error: "mismatch" });
+    }
+
+    const connectionId = rid(8);
+    const token = rid(24);
+    const exp = now() + 24 * 60 * 60_000;
+    CONNECTIONS.set(connectionId, { holderDid, token, exp });
+    CHALLENGES.delete(id);
+
+    res.json({ connectionId, token, holderDid, issuerDid: ISSUER_DID });
+  } catch (e: any) {
+    res.status(400).json({ error: "verification_failed", message: e?.message });
+  }
+});
+
+app.post("/issue", async (req, res) => {
+  try {
+    const tok = bearer(req);
+    if (!tok) return res.status(401).json({ error: "missing_token" });
+
+    const conn = [...CONNECTIONS.values()].find(
+      (c) => c.token === tok && c.exp > now()
+    );
+    if (!conn)
+      return res.status(401).json({ error: "invalid_or_expired_token" });
+
+    const { subjectDid, claims, type, validitySeconds } = req.body || {};
+    if (!subjectDid || typeof claims !== "object") {
+      return res.status(400).json({ error: "bad_request" });
+    }
+    if (subjectDid !== conn.holderDid) {
+      return res.status(400).json({ error: "subject_mismatch" });
+    }
+
+    const issuanceDate = new Date().toISOString();
+    const expSec = validitySeconds
+      ? Math.floor(Date.now() / 1000) + Number(validitySeconds)
+      : undefined;
+
+    const verifiableCredential = await agent.createVerifiableCredential({
+      credential: {
+        issuer: { id: ISSUER_DID },
+        issuanceDate,
+        expirationDate: expSec
+          ? new Date(expSec * 1000).toISOString()
+          : undefined,
+        type: [
+          "VerifiableCredential",
+          ...(Array.isArray(type) ? type : type ? [type] : []),
+        ],
+        credentialSubject: { id: subjectDid, ...claims },
+      },
+      proofFormat: "jwt",
+    });
+
+    res.json({ ok: true, vc: verifiableCredential });
+  } catch (e: any) {
+    res.status(400).json({ error: String(e?.message ?? e) });
+  }
 });
 
 app.listen(PORT, () => {

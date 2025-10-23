@@ -8,6 +8,144 @@ import type {
 import * as fs from "fs/promises";
 import * as path from "path";
 
+const REST_DIR = "rest";
+const CONN_PATH = path.join(REST_DIR, "connections.json");
+
+async function loadConns(): Promise<Record<string, any>> {
+  try {
+    return JSON.parse(await fs.readFile(CONN_PATH, "utf8"));
+  } catch {
+    return {};
+  }
+}
+async function saveConns(obj: Record<string, any>) {
+  await fs.mkdir(REST_DIR, { recursive: true });
+  await fs.writeFile(CONN_PATH, JSON.stringify(obj, null, 2));
+}
+
+async function connectServer(agent: TAgent): Promise<void> {
+  const base = await promptUser("Server base (ex: http://localhost:5501): ");
+
+  // alege DID holder
+  const ids = await agent.didManagerFind();
+  if (ids.length === 0) {
+    console.log("Nu ai DID-uri. Creează unul întâi.");
+    return;
+  }
+  ids.forEach((d, i) => console.log(`${i + 1}. ${d.did} (${d.alias || ""})`));
+  const idx = Number(await promptUser("Alege DID holder #: ")) - 1;
+  const holder = ids[idx];
+  if (!holder) return console.log("Selecție invalidă.");
+
+  // alege DID holder (ai deja codul tău)
+  const holderDid = holder.did;
+
+  // 1) cere challenge
+  const ch = await fetch(`${base}/connect/challenge`).then((r) => r.json());
+
+  // 2) pregătește payload-ul
+  const payload = { id: ch.id, challenge: ch.challenge, ts: Date.now() };
+  const data = new TextEncoder().encode(JSON.stringify(payload));
+
+  // 3) ia o cheie a DID-ului și semnează
+  const holderFull = await agent.didManagerGet({ did: holderDid });
+  const key = holderFull.keys[0]; // ia prima cheie (sau găsește după 'assertionMethod')
+
+  const alg = key.type === "Ed25519" ? "EdDSA" : "ES256K";
+  const sigB64u = await agent.keyManagerSign({ keyRef: key.kid, data, alg });
+
+  // 4) confirmă pairing-ul
+  const conf = await fetch(`${base}/connect/confirm`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: ch.id, holderDid, payload, sig: sigB64u, alg }),
+  }).then((r) => r.json());
+
+  if (!conf?.token) {
+    console.log("Pairing eșuat:", conf);
+    return;
+  }
+
+  if (!conf?.token) return console.log("Pairing eșuat:", conf);
+
+  const conns = await loadConns();
+  conns[base] = {
+    connectionId: conf.connectionId,
+    token: conf.token,
+    holderDid: holder.did,
+    issuerDid: conf.issuerDid,
+  };
+  await saveConns(conns);
+
+  console.log(
+    `✅ Conectat la ${base}\n   Issuer DID: ${conf.issuerDid}\n   Holder DID: ${holder.did}\n   Token salvat în ${CONN_PATH}`
+  );
+}
+
+async function requestVC(agent: TAgent): Promise<void> {
+  const conns = await loadConns();
+  const bases = Object.keys(conns);
+  if (bases.length === 0) {
+    console.log(
+      "Nu ești conectat la niciun issuer. Folosește întâi 'Connect'."
+    );
+    return;
+  }
+
+  bases.forEach((b, i) => console.log(`${i + 1}. ${b}`));
+  const bidx = Number(await promptUser("Alege server #: ")) - 1;
+  const base = bases[bidx];
+  if (!base) return console.log("Selecție invalidă.");
+  const { token, holderDid } = conns[base];
+
+  // claims – JSON sau perechi key=value
+  console.log(
+    '\nIntrodu claims pentru VC (JSON sau perechi key=value). Exemplu: {"age":25,"income":9000,"citizenship":"RO"}'
+  );
+  const first = await promptUser("Claims: ");
+  let claims: any = {};
+  if (first.trim().startsWith("{")) {
+    claims = JSON.parse(first);
+  } else {
+    let cur = first;
+    while (cur) {
+      const [k, v] = cur.split("=");
+      if (k && v) claims[k.trim()] = isNaN(Number(v)) ? v.trim() : Number(v);
+      cur = await promptUser("Alt claim (key=value) sau Enter: ");
+    }
+  }
+
+  const type = await promptUser(
+    'Type VC (ex: "PersonCredential", Enter pt. none): '
+  );
+  const validity = await promptUser("Valability (sec, Enter pt. none): ");
+
+  const resp = await fetch(`${base}/issue`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      subjectDid: holderDid,
+      claims,
+      type: type ? [type] : undefined,
+      validitySeconds: validity ? Number(validity) : undefined,
+    }),
+  }).then((r) => r.json());
+
+  if (!resp?.ok || !resp?.vc) {
+    console.log("Emitere eșuată:", resp);
+    return;
+  }
+
+  // salvează VC în wallet (DataStore)
+  const saved = await agent.dataStoreSaveVerifiableCredential({
+    verifiableCredential: resp.vc,
+  });
+  console.log(`✅ VC primit și salvat. Hash: ${saved?.hash || "(ok)"}`);
+}
+
 function promptUser(question: string): Promise<string> {
   const rl = createInterface({
     input: process.stdin,
@@ -418,6 +556,10 @@ async function showMenu(): Promise<void> {
   console.log("  7. 📋 List VPs");
   console.log("  8. ➕ Create new VP");
   console.log("  9. 📤 Export VP");
+  console.log("\n🔗 Connections:");
+  console.log(" 10. 🔐 Connect to issuer/verifier");
+  console.log("\n📥 Issuer:");
+  console.log(" 11. 📩 Request VC from issuer");
   console.log("\n❌ 0. Exit");
   console.log(
     "════════════════════════════════════════════════════════════════"
@@ -481,6 +623,15 @@ async function main(): Promise<void> {
         case "9":
           await exportVP(agent);
           await promptUser("\n⏎ Click Enter to continue...");
+          break;
+
+        case "10":
+          await connectServer(agent);
+          await promptUser("\n⏎ Enter pentru a continua...");
+          break;
+        case "11":
+          await requestVC(agent);
+          await promptUser("\n⏎ Enter pentru a continua...");
           break;
 
         case "0":

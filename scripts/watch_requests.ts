@@ -39,11 +39,8 @@ async function buildAndPresent(context: any) {
     await readFile("build/aggregate/public.json", "utf8")
   );
 
-  const payload = {
-    vp,
-    contextId: context.contextId,
-    zk: { proof, publicSignals },
-  };
+  const ctxIdDec = BigInt(context.contextId).toString();
+  const payload = { vp, contextId: ctxIdDec, zk: { proof, publicSignals } };
   const resp = await fetch(`${BASE}/present`, {
     method: "POST",
     headers: { "content-type": "application/json" },
