@@ -1,5 +1,6 @@
 import { createInterface } from "readline";
 import { setupAgent, type TAgent } from "./agent.ts";
+import { base64url } from "jose";
 import type {
   IIdentifier,
   VerifiableCredential,
@@ -49,16 +50,45 @@ async function connectServer(agent: TAgent): Promise<void> {
 
   // 3) ia o cheie a DID-ului și semnează
   const holderFull = await agent.didManagerGet({ did: holderDid });
-  const key = holderFull.keys[0]; // ia prima cheie (sau găsește după 'assertionMethod')
+  const key = holderFull.keys[0];
+  const algorithm = key.type === "Ed25519" ? "EdDSA" : "ES256K";
 
-  const alg = key.type === "Ed25519" ? "EdDSA" : "ES256K";
-  const sigB64u = await agent.keyManagerSign({ keyRef: key.kid, data, alg });
+  let sig = await agent.keyManagerSign({ keyRef: key.kid, data, algorithm });
+
+  let sigB64u: string;
+  if (sig instanceof Uint8Array) {
+    sigB64u = base64url.encode(sig); // raw bytes -> b64u
+  } else if (typeof sig === "string") {
+    if (sig.startsWith("0x")) {
+      // hex -> bytes -> b64u
+      const bytes = Uint8Array.from(Buffer.from(sig.slice(2), "hex"));
+      sigB64u = base64url.encode(bytes);
+    } else {
+      // e deja base64/base64url; încearcă direct ca base64url
+      try {
+        base64url.decode(sig); // ok ca b64u
+        sigB64u = sig;
+      } catch {
+        // e base64 clasic -> b64u
+        const bytes = Buffer.from(sig, "base64");
+        sigB64u = base64url.encode(bytes);
+      }
+    }
+  } else {
+    throw new Error("Unknown signature format from keyManagerSign");
+  }
 
   // 4) confirmă pairing-ul
   const conf = await fetch(`${base}/connect/confirm`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id: ch.id, holderDid, payload, sig: sigB64u, alg }),
+    body: JSON.stringify({
+      id: ch.id,
+      holderDid,
+      payload,
+      sig: sigB64u,
+      alg: algorithm,
+    }),
   }).then((r) => r.json());
 
   if (!conf?.token) {
