@@ -204,7 +204,10 @@ async function ensureIssuerDid() {
 
 // bootstrap agent
 (async () => {
-  agent = await setupAgent();
+  agent = await setupAgent(
+    "issuer",
+    process.env.ISSUER_KMS_PASSPHRASE || "change-me"
+  );
   await ensureIssuerDid();
 })();
 
