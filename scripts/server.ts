@@ -420,6 +420,9 @@ app.get("/connect/challenge", (_req, res) => {
   const challenge = rid(16);
   const exp = now() + 5 * 60_000;
   CHALLENGES.set(id, { id, challenge, exp });
+  console.log(
+    `[connect] challenge issued id=${id} exp=${new Date(exp).toISOString()}`
+  );
   res.json({ id, challenge, issuerDid: ISSUER_DID, expiresAt: exp });
 });
 
@@ -428,9 +431,14 @@ app.get("/connect/challenge", (_req, res) => {
 app.post("/connect/confirm", async (req, res) => {
   try {
     const { id, holderDid, payload, sig, alg } = req.body || {};
+    console.log(
+      `[connect] confirm start id=${id} holder=${holderDid} alg=${alg}`
+    );
     const ch = CHALLENGES.get(String(id));
-    if (!ch || ch.exp < now())
+    if (!ch || ch.exp < now()) {
+      console.warn(`[connect] challenge expired/missing id=${id}`);
       return res.status(400).json({ error: "challenge_expired" });
+    }
 
     // 1) validează payload
     const expected = JSON.stringify({
@@ -461,9 +469,16 @@ app.post("/connect/confirm", async (req, res) => {
     const exp = now() + 24 * 60 * 60_000;
     CONNECTIONS.set(connectionId, { holderDid, token, exp });
     CHALLENGES.delete(id);
+    console.log(
+      `[connect] ✅ paired holder=${holderDid} connectionId=${connectionId} token=${token.slice(
+        0,
+        8
+      )}…`
+    );
 
     res.json({ connectionId, token, holderDid, issuerDid: ISSUER_DID });
   } catch (e: any) {
+    console.error(`[connect] ❌ verification_failed: ${e?.message || e}`);
     res.status(400).json({ error: "verification_failed", message: e?.message });
   }
 });
@@ -472,6 +487,7 @@ app.post("/connect/confirm", async (req, res) => {
 // body: { subjectDid, claims, type?, validitySeconds? }
 app.post("/issue", async (req, res) => {
   try {
+    console.log("[issue] request received");
     const tok = bearer(req);
     if (!tok) return res.status(401).json({ error: "missing_token" });
 
@@ -482,6 +498,11 @@ app.post("/issue", async (req, res) => {
       return res.status(401).json({ error: "invalid_or_expired_token" });
 
     const { subjectDid, claims, type, validitySeconds } = req.body || {};
+    console.log(
+      `[issue] by holder=${conn.holderDid} subject=${subjectDid} types=${
+        Array.isArray(type) ? type.join(",") : type || "(none)"
+      }`
+    );
     if (!subjectDid || typeof claims !== "object")
       return res.status(400).json({ error: "bad_request" });
     if (subjectDid !== conn.holderDid)
@@ -508,8 +529,10 @@ app.post("/issue", async (req, res) => {
       proofFormat: "jwt",
     });
 
+    console.log("[issue] ✅ VC issued");
     res.json({ ok: true, vc: verifiableCredential });
   } catch (e: any) {
+    console.error(`[issue] ❌ ${String(e?.message ?? e)}`);
     res.status(400).json({ error: String(e?.message ?? e) });
   }
 });
