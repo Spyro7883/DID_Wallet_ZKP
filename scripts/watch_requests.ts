@@ -7,7 +7,7 @@ import { spawn } from "child_process";
 const WSS = process.env.ALCHEMY_WSS!;
 const ADDR = process.env.SIGNALS_ADDR!;
 const DID = process.env.HOLDER_DID!;
-const SALT = process.env.SALT!; // 0x...
+const SALT = process.env.SALT!;
 const BASE = process.env.SERVER_BASE || "http://localhost:5501";
 
 function run(cmd: string, args: string[], env?: Record<string, string>) {
@@ -50,17 +50,23 @@ async function buildAndPresent(context: any) {
   console.log("📨 present ->", resp);
   if (resp?.token) {
     await writeFile("rest/token.txt", resp.token);
-    console.log("🔑 token salvat în rest/token.txt");
+    console.log("🔑 token saved in rest/token.txt");
   }
 }
 
-const commit = keccak256(
-  new Uint8Array([
-    ...toUtf8Bytes(DID),
-    ...Buffer.from(SALT.replace(/^0x/, ""), "hex"),
-  ])
-);
-console.log("👂 Watching PresentationRequested for commit =", commit);
+const saltBytes = Buffer.from(SALT.replace(/^0x/, ""), "hex");
+
+function computeCommit(challengeHash: string) {
+  return keccak256(
+    new Uint8Array([
+      ...toUtf8Bytes(DID),
+      ...saltBytes,
+      ...toUtf8Bytes(challengeHash),
+    ])
+  );
+}
+
+console.log("👂 Watching PresentationRequested for DID =", DID);
 
 (async () => {
   const p = new WebSocketProvider(WSS);
@@ -69,12 +75,17 @@ console.log("👂 Watching PresentationRequested for commit =", commit);
   c.on(
     "PresentationRequested",
     async (requestId, verifier, toCommit, challengeHash) => {
-      if (String(toCommit).toLowerCase() !== commit.toLowerCase()) return;
+      const expectedCommit = computeCommit(String(challengeHash));
+
+      if (String(toCommit).toLowerCase() !== expectedCommit.toLowerCase()) {
+        return;
+      }
 
       console.log("\n🎯 Request for me:", {
         requestId,
         verifier,
         challengeHash,
+        toCommit,
       });
 
       let claimed: any;

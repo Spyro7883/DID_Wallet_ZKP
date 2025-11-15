@@ -1,4 +1,3 @@
-// scripts/generate_input.ts
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -62,7 +61,6 @@ function ensureDir(p: string) {
 }
 
 (function main() {
-  // poziționale: <circuit> <vpPath>
   const [, , c, rel, ...rest] = process.argv;
   if (!c || !rel) {
     console.error(
@@ -75,20 +73,7 @@ function ensureDir(p: string) {
 
   const flags = parseFlags(rest);
 
-  // 1) policy / parametri de verificare
-  let contextId =
-    flags.contextId ||
-    process.env.CONTEXT_ID ||
-    (() => {
-      const p = path.resolve("rest/challenge.json");
-      if (fs.existsSync(p)) {
-        try {
-          const j = JSON.parse(fs.readFileSync(p, "utf8"));
-          if (j?.contextId) return String(j.contextId);
-        } catch {}
-      }
-      return "";
-    })();
+  let contextId = flags.contextId || process.env.CONTEXT_ID || "";
 
   const cit = (flags.cit || flags.citizenship || process.env.CITIZENSHIP || "")
     .toUpperCase()
@@ -96,14 +81,13 @@ function ensureDir(p: string) {
   const Ls = flags.L || process.env.L;
   const Us = flags.U || process.env.U;
 
-  // dacă a fost dat un fișier policy, îl încărcăm (poate suprascrie contextId/L/U/cit)
   if (flags.policy) {
     const p = path.isAbsolute(flags.policy)
       ? flags.policy
       : path.resolve(flags.policy);
     const pol = JSON.parse(fs.readFileSync(p, "utf8"));
     contextId = pol.contextId ?? contextId;
-    // acceptăm atât expectedCitizenship cât și cit
+
     if (pol.expectedCitizenship || pol.cit) pol.expectedCitizenship ??= pol.cit;
     if (pol.expectedCitizenship) (flags as any).cit = pol.expectedCitizenship;
     if (pol.L !== undefined) (flags as any).L = String(pol.L);
@@ -131,7 +115,6 @@ function ensureDir(p: string) {
 
   const wantAnchors = (flags.anchors ?? "0") === "1";
 
-  // 2) încărcăm VP și extragem atributele
   const vp: VPShape = JSON.parse(fs.readFileSync(vpPath, "utf8"));
   const vcs = vp.verifiableCredential ?? [];
   if (!Array.isArray(vcs) || vcs.length === 0) {
@@ -215,7 +198,6 @@ function ensureDir(p: string) {
   assertDefined(citizenship, "citizenship");
   assertDefined(didHash, "didHash");
 
-  // 3) validări de dimensiune (circuit constraints)
   function ensureFits(v: bigint, bits: number, name: string) {
     const max = 1n << BigInt(bits);
     if (v < 0n || v >= max)
@@ -225,7 +207,6 @@ function ensureDir(p: string) {
   ensureFits(income, 32, "income");
   ensureFits(age, 8, "age");
 
-  // 4) pregătim inputul pentru circuit
   const salt = BigInt("0x" + crypto.randomBytes(31).toString("hex"));
 
   let input: Record<string, string>;

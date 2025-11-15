@@ -26,17 +26,32 @@ import { SIGNALS_ABI } from "./signals-abi.ts";
     throw new Error("SALT has to be 0x + 64 hex (32 bytes)");
 
   const salt = Buffer.from(SALT_HEX.slice(2), "hex");
-  const toCommit = ethers.keccak256(
-    new Uint8Array([...ethers.toUtf8Bytes(DID), ...salt])
-  );
 
   const requestId = ethers.hexlify(ethers.randomBytes(32));
   const contextId = ethers.hexlify(ethers.randomBytes(16));
+
   const challengeHash = ethers.keccak256(ethers.toUtf8Bytes(String(contextId)));
+
+  const toCommit = ethers.keccak256(
+    new Uint8Array([
+      ...ethers.toUtf8Bytes(DID),
+      ...salt,
+      ...ethers.toUtf8Bytes(challengeHash),
+    ])
+  );
+
   const schemaId = 1n;
   const expiresAt = Math.floor(Date.now() / 1000) + 600;
 
-  console.log("Registering off-chain context...", { challengeHash, toCommit });
+  console.log("Registering off-chain context...", {
+    contextId,
+    challengeHash,
+    toCommit,
+    CIT,
+    L,
+    U,
+  });
+
   const reg = await fetch(`${base}/requests/register`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -46,11 +61,17 @@ import { SIGNALS_ABI } from "./signals-abi.ts";
       context: { contextId, expectedCitizenship: CIT, L, U, expiresAt },
     }),
   }).then((r) => r.json());
+
   if (!reg?.ok)
     throw new Error(`/requests/register failed: ${JSON.stringify(reg)}`);
   console.log("✅ /requests/register ok");
 
-  console.log("Emitting PresentationRequested...", { toCommit, challengeHash });
+  console.log("Emitting PresentationRequested...", {
+    requestId,
+    toCommit,
+    challengeHash,
+  });
+
   const tx = await signals.requestPresentation(
     requestId,
     toCommit,
@@ -58,6 +79,7 @@ import { SIGNALS_ABI } from "./signals-abi.ts";
     schemaId
   );
   const receipt = await tx.wait();
+
   console.log(
     `✅ requestPresentation tx: ${tx.hash} (block ${receipt.blockNumber})`
   );

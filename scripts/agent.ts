@@ -29,7 +29,7 @@ export type TAgent = ReturnType<typeof createAgent>;
 export class WrongPassphraseError extends Error {
   code = "WRONG_PASSPHRASE";
   constructor(profile: string) {
-    super(`Parolă incorectă pentru wallet-ul "${profile}".`);
+    super(`Wrong password for the wallet "${profile}".`);
   }
 }
 
@@ -43,7 +43,6 @@ const deriveSecret = (pw: string, salt: Buffer) => scryptSync(pw, salt, 32);
 const guardOf = (dk: Buffer) =>
   createHmac("sha256", dk).update("kms-guard-v1").digest("hex");
 
-// ── DS helpers
 async function dsAdmin(): Promise<DataSource> {
   const ds = new DataSource({
     type: "postgres",
@@ -88,7 +87,7 @@ async function dsForProfile(schema: string): Promise<DataSource> {
     username: process.env.POSTGRESQL_USER,
     password: process.env.POSTGRESQL_PASS,
     database: process.env.POSTGRESQL_DB,
-    schema, // << fiecare profil în schema lui
+    schema,
     entities: Entities,
     synchronize: false,
     logging: ["error", "warn"],
@@ -112,7 +111,6 @@ async function ensureWalletMeta(ds: DataSource, schema: string) {
   );
 }
 
-// ── open-or-create
 export async function setupAgent(
   profileRaw: string,
   passphrase: string
@@ -120,7 +118,6 @@ export async function setupAgent(
   const profile = slug(profileRaw);
   const schema = schemaFor(profile);
 
-  // registru global (nu mai aruncăm la "existent"/"inexistent")
   const reg = await dsAdmin();
   await ensureRegistry(reg);
   await reg.query(
@@ -129,12 +126,10 @@ export async function setupAgent(
   );
   await reg.destroy();
 
-  // schema per profil + tabele
   await ensureSchema(schema);
   const ds = await dsForProfile(schema);
   await ensureWalletMeta(ds, schema);
 
-  // salt + guard: dacă nu există, îl setăm; dacă există, verificăm parola
   let row = (
     await ds.query(
       `SELECT salt, pass_guard FROM "${schema}".wallet_meta LIMIT 1;`
@@ -155,7 +150,6 @@ export async function setupAgent(
     const salt: Buffer = Buffer.from(row.salt);
     const g = guardOf(deriveSecret(passphrase, salt));
     if (!row.pass_guard) {
-      // backfill pentru profiluri vechi
       await ds.query(
         `UPDATE "${schema}".wallet_meta SET pass_guard=$1 WHERE id=TRUE;`,
         [g]

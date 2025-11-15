@@ -1,4 +1,3 @@
-// server.ts
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
@@ -10,15 +9,12 @@ import "reflect-metadata";
 import { setupAgent, type TAgent } from "./agent.ts";
 
 import { base64url } from "jose";
-import { ed25519 as edc } from "@noble/curves/ed25519"; // ✅ are SHA-512 built-in
+import { ed25519 as edc } from "@noble/curves/ed25519";
 import { secp256k1 as secp } from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha2.js";
 
 import bs58 from "bs58";
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Config
-// ───────────────────────────────────────────────────────────────────────────────
 const app = express();
 const PORT = 5501;
 
@@ -29,9 +25,6 @@ const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
 app.use(cors());
 app.use(express.json());
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Tipuri & utilitare
-// ───────────────────────────────────────────────────────────────────────────────
 type ProofPack = { proof: any; publicSignals: any[] | Record<string, any> };
 type ZkContext = {
   contextId: string;
@@ -47,14 +40,11 @@ const b64uToBytes = (s: string) => new Uint8Array(base64url.decode(s));
 const utf8 = (s: string) => new TextEncoder().encode(s);
 
 function normalizeSecpPub(raw: Uint8Array): Uint8Array {
-  // întoarce cheia publică comprimată (33 bytes)
   if (raw.length === 33) return raw; // deja comprimată
   if (raw.length === 65 && raw[0] === 0x04) {
-    // uncompressed 0x04||X||Y
     return secp.ProjectivePoint.fromHex(raw).toRawBytes(true);
   }
   if (raw.length === 64) {
-    // X||Y fără prefix
     const uncompressed = new Uint8Array(65);
     uncompressed[0] = 0x04;
     uncompressed.set(raw, 1);
@@ -74,29 +64,23 @@ function extractPubKeyFromDidDoc(didDoc: any): {
     const mb = vm.publicKeyMultibase || vm.publicKeyBase58;
     const jwk = vm.publicKeyJwk;
 
-    // 1) publicKeyMultibase (Multikey) -> detectăm din prefixul multicodec
     if (mb) {
       const raw = bs58.decode(String(mb).replace(/^z/, ""));
       if (raw.length >= 2) {
-        const prefix = (raw[0] << 8) | raw[1]; // multicodec
+        const prefix = (raw[0] << 8) | raw[1];
         const body = raw.slice(2);
         if (prefix === 0xed01) {
-          // ed25519-pub
           return { type: "Ed25519", pub: body };
         }
         if (prefix === 0xe701) {
-          // secp256k1-pub
-          // comprima la 33B dacă e cazul
           return { type: "Secp256k1", pub: normalizeSecpPub(body) };
         }
       }
-      // dacă tipul spune clar ed/secp, folosește-l ca fallback
       if (t.includes("ed25519")) return { type: "Ed25519", pub: raw.slice(2) };
       if (t.includes("secp256k1"))
         return { type: "Secp256k1", pub: normalizeSecpPub(raw.slice(2)) };
     }
 
-    // 2) JWK
     if (jwk?.crv === "Ed25519" && jwk.x) {
       return { type: "Ed25519", pub: base64url.decode(jwk.x) };
     }
@@ -113,9 +97,13 @@ function extractPubKeyFromDidDoc(didDoc: any): {
   throw new Error("No suitable verificationMethod found");
 }
 
-function keccakDidSalt(did: string, saltHex: string) {
+function keccakDidSalt(did: string, saltHex: string, challengeHash: string) {
   const salt = Buffer.from(saltHex.replace(/^0x/, ""), "hex");
-  const bytes = new Uint8Array([...toUtf8Bytes(did), ...salt]);
+  const bytes = new Uint8Array([
+    ...toUtf8Bytes(did),
+    ...salt,
+    ...toUtf8Bytes(challengeHash),
+  ]);
   return keccak256(bytes);
 }
 
@@ -153,7 +141,6 @@ const TTL_SECONDS = 600;
 let agent: TAgent;
 let ISSUER_DID = "";
 
-// pairing (off-chain)
 const CHALLENGES = new Map<
   string,
   { id: string; challenge: string; exp: number }
@@ -202,7 +189,6 @@ async function ensureIssuerDid() {
   ISSUER_DID = issuer.did;
 }
 
-// bootstrap agent
 (async () => {
   agent = await setupAgent(
     "issuer",
@@ -211,7 +197,6 @@ async function ensureIssuerDid() {
   await ensureIssuerDid();
 })();
 
-// curățare tokens
 setInterval(() => {
   const t = Math.floor(Date.now() / 1000);
   for (const [token, exp] of TOKENS.entries()) {
@@ -219,9 +204,6 @@ setInterval(() => {
   }
 }, 60_000);
 
-// ───────────────────────────────────────────────────────────────────────────────
-// ZK Present flow
-// ───────────────────────────────────────────────────────────────────────────────
 app.post("/present", async (req, res) => {
   console.log("\n Payload received @/present");
   console.log(JSON.stringify(req.body, null, 2));
@@ -252,7 +234,7 @@ app.post("/present", async (req, res) => {
     if (!ok) throw new Error("zk verification failed");
     console.log("valid ZK proof");
 
-    console.log("\n Verificare structură publicSignals...");
+    console.log("\n Structured verification publicSignals...");
     const allValid = readSignal(zk.publicSignals, "allValid");
     const privHash = readSignal(zk.publicSignals, "privHash");
     const agePrivHash = readSignal(zk.publicSignals, "agePrivHash");
@@ -332,7 +314,6 @@ app.post("/present", async (req, res) => {
   }
 });
 
-// Context cache (off-chain)
 app.post("/requests/register", (req, res) => {
   const { challengeHash, toCommit, context } = req.body || {};
   if (!challengeHash || !toCommit || !context)
@@ -360,7 +341,11 @@ app.post("/requests/claim", (req, res) => {
   const rec = REQUESTS.get(String(challengeHash).toLowerCase());
   if (!rec) return res.status(404).json({ error: "unknown_request" });
 
-  const computed = keccakDidSalt(String(did), String(salt)).toLowerCase();
+  const computed = keccakDidSalt(
+    String(did),
+    String(salt),
+    String(challengeHash)
+  ).toLowerCase();
   if (computed !== rec.toCommit)
     return res.status(400).json({ error: "commit_mismatch" });
 
@@ -370,7 +355,6 @@ app.post("/requests/claim", (req, res) => {
   return res.json({ ok: true, context: rec.ctx });
 });
 
-// Resursă protejată cu token
 app.get("/secret", (req, res) => {
   const authHeader = req.headers.authorization;
   const token = authHeader?.split(" ")[1];
@@ -400,7 +384,6 @@ app.get("/secret", (req, res) => {
   });
 });
 
-// Health
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
@@ -410,11 +393,6 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Pairing (off-chain) & Issuing
-// ───────────────────────────────────────────────────────────────────────────────
-
-// GET /connect/challenge -> { id, challenge, issuerDid, expiresAt }
 app.get("/connect/challenge", (_req, res) => {
   const id = rid(8);
   const challenge = rid(16);
@@ -426,8 +404,6 @@ app.get("/connect/challenge", (_req, res) => {
   res.json({ id, challenge, issuerDid: ISSUER_DID, expiresAt: exp });
 });
 
-// POST /connect/confirm  Body: { id, holderDid, payload, sig, alg }
-// payload = { id, challenge, ts }
 app.post("/connect/confirm", async (req, res) => {
   try {
     const { id, holderDid, payload, sig, alg } = req.body || {};
@@ -440,7 +416,6 @@ app.post("/connect/confirm", async (req, res) => {
       return res.status(400).json({ error: "challenge_expired" });
     }
 
-    // 1) validează payload
     const expected = JSON.stringify({
       id: ch.id,
       challenge: ch.challenge,
@@ -449,21 +424,18 @@ app.post("/connect/confirm", async (req, res) => {
     if (JSON.stringify(payload) !== expected)
       return res.status(400).json({ error: "payload_mismatch" });
 
-    // 2) rezolvă DID & extrage cheia publică
     const didDoc = await agent.resolveDid({ didUrl: holderDid });
     const { type, pub } = extractPubKeyFromDidDoc(didDoc);
 
-    // 3) verifică semnătura
     const msg = utf8(JSON.stringify(payload));
     const signature = b64uToBytes(sig);
     const ok =
       type === "Ed25519"
         ? edc.verify(signature, msg, pub)
-        : secp.verify(signature, sha256(msg), pub); // ES256K
+        : secp.verify(signature, sha256(msg), pub);
 
     if (!ok) return res.status(400).json({ error: "bad_signature" });
 
-    // 4) emite conexiunea
     const connectionId = rid(8);
     const token = rid(24);
     const exp = now() + 24 * 60 * 60_000;
@@ -483,8 +455,6 @@ app.post("/connect/confirm", async (req, res) => {
   }
 });
 
-// POST /issue  (Authorization: Bearer <token>)
-// body: { subjectDid, claims, type?, validitySeconds? }
 app.post("/issue", async (req, res) => {
   try {
     console.log("[issue] request received");
@@ -536,8 +506,6 @@ app.post("/issue", async (req, res) => {
     res.status(400).json({ error: String(e?.message ?? e) });
   }
 });
-
-// ───────────────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`\nVerifier running on http://localhost:${PORT}`);

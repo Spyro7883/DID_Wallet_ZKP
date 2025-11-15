@@ -1,8 +1,3 @@
-// citizen.ts
-
-// ───────────────────────────────────────────────────────────────────────────────
-// Imports
-// ───────────────────────────────────────────────────────────────────────────────
 import { DataSource } from "typeorm";
 import { Entities } from "@veramo/data-store";
 import * as zlib from "zlib";
@@ -21,20 +16,13 @@ import type { IIdentifier } from "@veramo/core";
 import * as fs from "fs/promises";
 import * as path from "path";
 
-// Dacă vrei revalidare strictă a parolei înainte de backup: setează STRICT_OPS=1
 const STRICT_OPS = (process.env.STRICT_OPS ?? "0") === "1";
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Globals
-// ───────────────────────────────────────────────────────────────────────────────
 let PROFILE = "";
 let REST_DIR = "";
 let CONN_PATH = "";
-let SESSION_PASS = ""; // parola wallet-ului pentru sesiunea curentă
+let SESSION_PASS = "";
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Utils pentru backup/restore
-// ───────────────────────────────────────────────────────────────────────────────
 const TABLES = [
   "wallet_meta",
   "identifier",
@@ -94,14 +82,13 @@ async function findBackups(root = "rest"): Promise<string[]> {
     }
   }
   await walk(root);
-  // sort desc alfabetic (numele conține ISO date → merge ca aproximare)
   return out.sort().reverse();
 }
 
 async function readBackupContainer(file: string): Promise<any | null> {
   try {
     const raw = await fs.readFile(file);
-    const txt = raw.toString("utf8").replace(/^\uFEFF/, ""); // strip BOM
+    const txt = raw.toString("utf8").replace(/^\uFEFF/, "");
     return JSON.parse(txt);
   } catch {
     return null;
@@ -156,49 +143,43 @@ function getArg(name: string) {
 
 async function chooseProfile(): Promise<string> {
   while (true) {
-    const existing = await listWalletProfiles(); // slugs
-    console.log("\nWallet-uri locale:");
-    if (existing.length === 0) console.log("  (niciunul încă)");
+    const existing = await listWalletProfiles();
+    console.log("\nLocal wallets:");
+    if (existing.length === 0) console.log("nothing");
     existing.forEach((p, i) => console.log(`  ${i + 1}. ${p}`));
-    console.log(`  ${existing.length + 1}. + Creează wallet nou`);
-    console.log(`  ${existing.length + 2}. ♻️  Restore din backup`);
+    console.log(`  ${existing.length + 1}. + Creeate a new wallet`);
+    console.log(`  ${existing.length + 2}. ♻️  Restore from backup`);
 
-    const pickRaw = await promptUser("\nAlege #: ");
+    const pickRaw = await promptUser("\nChoose #: ");
     const pick = Number(pickRaw);
 
-    // selectează un wallet existent
     if (!Number.isNaN(pick) && pick >= 1 && pick <= existing.length) {
       return existing[pick - 1];
     }
 
-    // creează wallet nou
     if (pick === existing.length + 1) {
-      const alias = (
-        await promptUser("Nume wallet nou (ex: eusebiu): ")
-      ).trim();
+      const alias = (await promptUser("Name new wallet: ")).trim();
       const sl = alias
         .toLowerCase()
         .replace(/[^a-z0-9_]+/g, "_")
         .replace(/^_+|_+$/g, "");
       if (existing.includes(sl)) {
-        console.log("❌ Numele este deja folosit. Alege altul.");
+        console.log("❌ Name has already been used. Choose another.");
         continue;
       }
       return alias;
     }
 
-    // restore din backup (poate întoarce numele profilului restaurat)
     if (pick === existing.length + 2) {
-      const restored = await restoreWallet(); // <-- returnează string | null
+      const restored = await restoreWallet();
       if (restored) {
-        console.log(`\n✅ Deschid profilul restaurat: ${restored}`);
+        console.log(`\n✅ Open restored profile: ${restored}`);
         return restored;
       }
-      // dacă a eșuat/anulat, reafișăm lista
       continue;
     }
 
-    console.log("Opțiune invalidă.");
+    console.log("Invalid option.");
   }
 }
 
@@ -251,21 +232,18 @@ async function saveConns(obj: Record<string, any>) {
   await fs.writeFile(CONN_PATH, JSON.stringify(obj, null, 2));
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Flows: Connect / Issue
-// ───────────────────────────────────────────────────────────────────────────────
 async function connectServer(agent: TAgent): Promise<void> {
   const base = await promptUser("Server base (ex: http://localhost:5501): ");
 
   const ids = await agent.didManagerFind();
   if (ids.length === 0) {
-    console.log("Nu ai DID-uri. Creează unul întâi.");
+    console.log("You don't have DIDs. Create one first.");
     return;
   }
   ids.forEach((d, i) => console.log(`${i + 1}. ${d.did} (${d.alias || ""})`));
-  const idx = Number(await promptUser("Alege DID holder #: ")) - 1;
+  const idx = Number(await promptUser("Pick DID holder #: ")) - 1;
   const holder = ids[idx];
-  if (!holder) return console.log("Selecție invalidă.");
+  if (!holder) return console.log("Invalid section.");
   const holderDid = holder.did;
 
   const ch = await fetch(`${base}/connect/challenge`).then((r) => r.json());
@@ -307,7 +285,7 @@ async function connectServer(agent: TAgent): Promise<void> {
     }),
   }).then((r) => r.json());
 
-  if (!conf?.token) return console.log("Pairing eșuat:", conf);
+  if (!conf?.token) return console.log("Failed pairing:", conf);
 
   const conns = await loadConns();
   conns[base] = {
@@ -319,7 +297,7 @@ async function connectServer(agent: TAgent): Promise<void> {
   await saveConns(conns);
 
   console.log(
-    `✅ Conectat la ${base}\n   Issuer DID: ${conf.issuerDid}\n   Holder DID: ${holder.did}\n   Token salvat în ${CONN_PATH}`
+    `✅ Conected at ${base}\n   Issuer DID: ${conf.issuerDid}\n   Holder DID: ${holder.did}\n   Token saved in ${CONN_PATH}`
   );
 }
 
@@ -328,16 +306,16 @@ async function requestVC(agent: TAgent): Promise<void> {
   const bases = Object.keys(conns);
   if (bases.length === 0)
     return console.log(
-      "Nu ești conectat la niciun issuer. Folosește întâi 'Connect'."
+      "You are not conected at no issuer. First, use 'Connect'."
     );
   bases.forEach((b, i) => console.log(`${i + 1}. ${b}`));
-  const bidx = Number(await promptUser("Alege server #: ")) - 1;
+  const bidx = Number(await promptUser("Pick server #: ")) - 1;
   const base = bases[bidx];
-  if (!base) return console.log("Selecție invalidă.");
+  if (!base) return console.log("Invalid selection.");
   const { token, holderDid } = conns[base];
 
   console.log(
-    '\nIntrodu claims (JSON sau key=value). Ex: {"age":25,"income":9000,"citizenship":"RO"}'
+    '\nEnter claims (JSON sau key=value). Ex: {"age":25,"income":9000,"citizenship":"RO"}'
   );
   const first = await promptUser("Claims: ");
   let claims: any = {};
@@ -347,14 +325,14 @@ async function requestVC(agent: TAgent): Promise<void> {
     while (cur) {
       const [k, v] = cur.split("=");
       if (k && v) claims[k.trim()] = isNaN(Number(v)) ? v.trim() : Number(v);
-      cur = await promptUser("Alt claim (key=value) sau Enter: ");
+      cur = await promptUser("Another claim or Enter: ");
     }
   }
 
   const type = await promptUser(
     'Type VC (ex: "PersonCredential", Enter pt. none): '
   );
-  const validity = await promptUser("Valability (sec, Enter pt. none): ");
+  const validity = await promptUser("Valability (sec, Enter for none): ");
 
   const resp = await fetch(`${base}/issue`, {
     method: "POST",
@@ -370,17 +348,14 @@ async function requestVC(agent: TAgent): Promise<void> {
     }),
   }).then((r) => r.json());
 
-  if (!resp?.ok || !resp?.vc) return console.log("Emitere eșuată:", resp);
+  if (!resp?.ok || !resp?.vc) return console.log("Failed emiting:", resp);
 
   const saved = await agent.dataStoreSaveVerifiableCredential({
     verifiableCredential: resp.vc,
   });
-  console.log(`✅ VC primit și salvat. Hash: ${saved?.hash || "(ok)"}`);
+  console.log(`✅ VC received and saved. Hash: ${saved?.hash || "(ok)"}`);
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Lists / Exports
-// ───────────────────────────────────────────────────────────────────────────────
 async function listDIDs(agent: TAgent): Promise<void> {
   console.log("\n DIDs available:");
   console.log("═".repeat(80));
@@ -438,7 +413,7 @@ async function exportDID(agent: TAgent): Promise<void> {
   const filepath = path.join(REST_DIR, filename);
   await fs.mkdir(REST_DIR, { recursive: true });
   await fs.writeFile(filepath, JSON.stringify(selected, null, 2));
-  console.log(`\n DID exportat în: ${filepath}`);
+  console.log(`\n DID exported in: ${filepath}`);
 }
 
 async function listVCs(agent: TAgent): Promise<void> {
@@ -625,13 +600,9 @@ async function exportVP(agent: TAgent): Promise<void> {
   console.log(`\n Exported VP in: ${filepath}`);
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Backup & Restore
-// ───────────────────────────────────────────────────────────────────────────────
 async function backupWallet(profile: string): Promise<void> {
   const schema = schemaFor(profile);
 
-  // 1) Citim meta (salt/guard) din DB
   const d = await ds(schema);
   const meta = (
     await d.query(
@@ -641,26 +612,24 @@ async function backupWallet(profile: string): Promise<void> {
 
   if (!meta) {
     await d.destroy();
-    return console.log(`❌ Wallet "${profile}" nu e inițializat.`);
+    return console.log(`❌ Wallet "${profile}" has not been initialized.`);
   }
 
   const saltBuf: Buffer = Buffer.from(meta.salt);
   const guardHex: string = String(meta.pass_guard || "");
 
-  // 2) Opțional: revalidare strictă a parolei (doar dacă STRICT_OPS=1)
   if (STRICT_OPS) {
-    const rePass = await promptHidden("Re-introdu parola wallet-ului: ");
+    const rePass = await promptHidden("Reenter wallet's password: ");
     const dk = scryptSync(rePass, saltBuf, 32);
     const calcGuard = createHmac("sha256", dk)
       .update("kms-guard-v1")
       .digest("hex");
     if (guardHex && calcGuard !== guardHex) {
       await d.destroy();
-      return console.log("❌ Parolă greșită. Backup anulat.");
+      return console.log("❌ Wrong password. Canceled backup.");
     }
   }
 
-  // 3) Dump tabele
   const dump: any = {
     version: 1,
     profile: slug(profile),
@@ -680,20 +649,19 @@ async function backupWallet(profile: string): Promise<void> {
   }
   await d.destroy();
 
-  // 4) Alegem parola de backup
   let exportPass = SESSION_PASS;
   const useSame =
     (
-      await promptUser("Criptez backup cu parola wallet-ului? (Y/n): ")
+      await promptUser("Encrypt backup with wallet's pass? (Y/n): ")
     ).toLowerCase() !== "n";
   if (!useSame) {
     const p1 = await promptHidden("Backup password: ");
     const p2 = await promptHidden("Confirm backup password: ");
-    if (!p1 || p1 !== p2) return console.log("❌ Backup passwords nu coincid.");
+    if (!p1 || p1 !== p2)
+      return console.log("❌ Backup passwords do not coincide.");
     exportPass = p1;
   }
 
-  // 5) Gzip + criptare AES-256-GCM, cheie derivată cu scrypt
   const gz = await gzip(Buffer.from(JSON.stringify(dump)));
   const bkpSalt = randomBytes(16);
   const key = scryptSync(exportPass, bkpSalt, 32);
@@ -729,23 +697,22 @@ async function backupWallet(profile: string): Promise<void> {
       .replace(/[:.]/g, "-")}.wallet.json`
   );
   await fs.writeFile(outPath, JSON.stringify(payload, null, 2));
-  console.log(`\n✅ Backup salvat: ${outPath}`);
+  console.log(`\n✅ Backup saved: ${outPath}`);
 }
 
 async function restoreWallet(): Promise<string | null> {
-  // 1) las utilizatorul să aleagă dintr-o listă
   const candidates = await findBackups();
   let chosenPath = "";
 
   if (candidates.length === 0) {
-    console.log("ℹ️  Nu am găsit backup-uri în folderul 'rest'.");
+    console.log("ℹ️  Haven't found backups in 'rest' folder.");
     chosenPath = (await promptUser("Backup file path: ")).trim();
   } else {
-    console.log("\n📦 Backups găsite (cele mai noi primele):");
+    console.log("\n📦 Found backups:");
     candidates.forEach((p, i) => console.log(`  ${i + 1}. ${p}`));
-    console.log(`  ${candidates.length + 1}. ✍️  Introdu path manual`);
+    console.log(`  ${candidates.length + 1}. ✍️  Enter manual path`);
 
-    const pick = Number(await promptUser("\nAlege #: "));
+    const pick = Number(await promptUser("\nPick #: "));
     if (pick === candidates.length + 1) {
       chosenPath = (await promptUser("Backup file path: ")).trim();
     } else {
@@ -754,25 +721,24 @@ async function restoreWallet(): Promise<string | null> {
   }
 
   if (!chosenPath) {
-    console.log("↩️  Anulat.");
+    console.log("↩️  Canceled.");
     return null;
   }
   if (!(await fileExists(chosenPath))) {
-    console.log("❌ Fișier inexistent, verifică path-ul.");
+    console.log("❌ File doesn't exist, verify path.");
     return null;
   }
 
   const container = await readBackupContainer(chosenPath);
   if (!container) {
-    console.log("❌ Nu am putut citi/parse fișierul de backup.");
+    console.log("❌ Couldn't read/parse backup file.");
     return null;
   }
   if (container.format !== "did-wallet-backup" || container.version !== 1) {
-    console.log("❌ Format backup invalid sau versiune nesuportată.");
+    console.log("❌ Backup format invalid or unsupported version.");
     return null;
   }
 
-  // 2) decriptăm containerul
   const backupPass = await promptHidden("Backup password: ");
   let gz: Buffer;
   try {
@@ -789,7 +755,7 @@ async function restoreWallet(): Promise<string | null> {
     decipher.setAuthTag(tag);
     gz = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   } catch {
-    console.log("❌ Parolă de backup greșită sau fișier corupt.");
+    console.log("❌ Backup password wrong or corrupted file.");
     return null;
   }
 
@@ -797,22 +763,20 @@ async function restoreWallet(): Promise<string | null> {
   try {
     dump = JSON.parse((await gunzip(gz)).toString("utf8"));
   } catch {
-    console.log("❌ Conținutul backup-ului este corupt (gunzip/JSON).");
+    console.log("❌ Backup content is corrupted.");
     return null;
   }
 
-  // 3) validăm parola wallet-ului din backup (cea pentru KMS)
-  const walletPass = await promptHidden("Wallet passphrase (din backup): ");
+  const walletPass = await promptHidden("Wallet passphrase: ");
   const salt = Buffer.from(dump.meta.saltHex, "hex");
   const guard = createHmac("sha256", scryptSync(walletPass, salt, 32))
     .update("kms-guard-v1")
     .digest("hex");
   if (guard !== dump.meta.passGuard) {
-    console.log("❌ Parolă wallet greșită pentru backup.");
+    console.log("❌ Wrong password for backup.");
     return null;
   }
 
-  // 4) alegem profilul țintă & scriem în DB
   const target =
     (
       await promptUser(`Restore as profile [Enter = ${dump.profile}]: `)
@@ -823,17 +787,18 @@ async function restoreWallet(): Promise<string | null> {
 
   if (!(await schemaIsEmpty(schema))) {
     const ok = (
-      await promptUser(`Schema "${schema}" are deja date. Scriu peste? (y/N): `)
+      await promptUser(
+        `Schema "${schema}" already has data. Overwrite? (y/N): `
+      )
     )
       .toLowerCase()
       .startsWith("y");
     if (!ok) {
-      console.log("↩️  Anulat.");
+      console.log("↩️ Canceled.");
       return null;
     }
   }
 
-  // creează tabelele Veramo dacă lipsesc
   const dSync = await ds(schema, true);
   await dSync.synchronize();
   await dSync.destroy();
@@ -880,25 +845,21 @@ async function restoreWallet(): Promise<string | null> {
 
   await d.destroy();
   console.log(
-    `\n✅ Restore complet în profilul "${target}" (schema: ${schema}).`
+    `\n✅ Complet restore in profile "${target}" (schema: ${schema}).`
   );
   return target;
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
 async function getPassphraseFromUser(): Promise<string> {
   const stdinPw = await getPassphraseFromStdinIfFlag();
-  const passphrase = stdinPw ?? (await promptHidden("Parola wallet: "));
+  const passphrase = stdinPw ?? (await promptHidden("Wallet pass: "));
   if (!passphrase) {
-    console.error("Parola goală.");
+    console.error("Empty pass.");
     process.exit(1);
   }
   return passphrase;
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// UI
-// ───────────────────────────────────────────────────────────────────────────────
 async function showMenu(): Promise<void> {
   console.clear();
   console.log(
@@ -938,9 +899,6 @@ async function showMenu(): Promise<void> {
   );
 }
 
-// ───────────────────────────────────────────────────────────────────────────────
-// Main
-// ───────────────────────────────────────────────────────────────────────────────
 async function main(): Promise<void> {
   console.log("Initialize Veramo Agent...");
   try {
@@ -957,9 +915,8 @@ async function main(): Promise<void> {
     CONN_PATH = path.join(REST_DIR, "connections.json");
     await fs.mkdir(REST_DIR, { recursive: true });
 
-    // open-or-create
     const agent = await setupAgent(PROFILE, SESSION_PASS);
-    console.log(`✅ Wallet ready for "${PROFILE}" (opened or created)\n`);
+    console.log(`✅ Wallet ready for "${PROFILE}"\n`);
 
     let running = true;
     while (running) {

@@ -21,8 +21,6 @@
     "zk:verify-onchain": "npx hardhat run scripts/verify.ts --network sepolia",
     "zk:clean-deployments": "rm -rf ignition/deployments/chain-*",
     "zk:clean": "rm -rf build/*",
-    "payload": "npx tsx scripts/payload.ts --vp rest/vp_demo.json --agg-proof build/aggregate/proof.json --agg-public build/aggregate/public.json",
-    "present": "npx tsx scripts/present.ts access_payload.json",
     "access": "npx tsx scripts/access.ts /secret",
     "citizen": "npx tsx scripts/citizen.ts",
     "signals:req": "dotenv -e .env -- tsx scripts/request_presentation.ts",

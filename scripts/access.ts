@@ -1,4 +1,3 @@
-// scripts/access.ts
 import { readFileSync, existsSync } from "node:fs";
 
 const VERIFIER = process.env.VERIFIER ?? "http://localhost:5501";
