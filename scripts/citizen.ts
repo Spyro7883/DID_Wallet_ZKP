@@ -301,6 +301,251 @@ async function connectServer(agent: TAgent): Promise<void> {
   );
 }
 
+async function tableCols(schema: string, table: string): Promise<Set<string>> {
+  const d = await ds();
+  try {
+    const rows = await d.query(
+      `select column_name
+       from information_schema.columns
+       where table_schema = $1 and table_name = $2;`,
+      [schema, table]
+    );
+    return new Set(rows.map((r: any) => r.column_name));
+  } finally {
+    await d.destroy();
+  }
+}
+
+async function ensureSearchIndexes(schema: string) {
+  const d = await ds(schema);
+  try {
+    const identCols = await tableCols(schema, "identifier");
+    const credCols = await tableCols(schema, "credential");
+    const claimCols = await tableCols(schema, "claim");
+    const presCols = await tableCols(schema, "presentation");
+
+    // DID
+    if (identCols.has("did"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_identifier_did ON "${schema}".identifier(did);`
+      );
+    if (identCols.has("alias"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_identifier_alias ON "${schema}".identifier(alias);`
+      );
+
+    // VC
+    if (credCols.has("hash"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_credential_hash ON "${schema}".credential(hash);`
+      );
+    if (credCols.has("subject"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_credential_subject ON "${schema}".credential(subject);`
+      );
+    if (credCols.has("issuer"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_credential_issuer ON "${schema}".credential(issuer);`
+      );
+    if (credCols.has("issuanceDate"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_credential_issued ON "${schema}".credential("issuanceDate");`
+      );
+    if (credCols.has("expirationDate"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_credential_exp ON "${schema}".credential("expirationDate");`
+      );
+
+    // Claims
+    if (claimCols.has("type"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_claim_type ON "${schema}".claim("type");`
+      );
+    if (claimCols.has("value"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_claim_value_lower ON "${schema}".claim((LOWER(value)));`
+      );
+
+    // VP
+    if (presCols.has("hash"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_presentation_hash ON "${schema}".presentation(hash);`
+      );
+    if (presCols.has("holder"))
+      await d.query(
+        `CREATE INDEX IF NOT EXISTS idx_${schema}_presentation_holder ON "${schema}".presentation(holder);`
+      );
+  } finally {
+    await d.destroy();
+  }
+}
+
+async function ensureIndexView(schema: string) {
+  const d = await ds(schema);
+  try {
+    const credCols = await tableCols(schema, "credential");
+    const presCols = await tableCols(schema, "presentation");
+
+    const ctxC = credCols.has("context")
+      ? `coalesce(c."context",'')`
+      : credCols.has("raw")
+      ? `coalesce((c.raw::jsonb ->> '@context'),'')`
+      : `''`;
+
+    const subjC = credCols.has("subject")
+      ? `coalesce(c.subject,'')`
+      : credCols.has("raw")
+      ? `coalesce(
+             CASE
+               WHEN jsonb_typeof(c.raw::jsonb->'credentialSubject')='object'
+                 THEN c.raw::jsonb #>> '{credentialSubject,id}'
+               ELSE NULL
+             END,'')`
+      : `''`;
+
+    const issuerC = credCols.has("issuer")
+      ? `coalesce(c.issuer,'')`
+      : credCols.has("raw")
+      ? `coalesce(
+             CASE
+               WHEN jsonb_typeof(c.raw::jsonb->'issuer')='string'
+                 THEN c.raw::jsonb ->> 'issuer'
+               ELSE c.raw::jsonb #>> '{issuer,id}'
+             END,'')`
+      : `''`;
+
+    const issuedC = credCols.has("issuanceDate")
+      ? `c."issuanceDate"::timestamp`
+      : credCols.has("raw")
+      ? `NULLIF(c.raw::jsonb ->> 'issuanceDate','')::timestamp`
+      : `NULL::timestamp`;
+
+    const presCtx = presCols.has("context")
+      ? `coalesce(p."context",'')`
+      : presCols.has("raw")
+      ? `coalesce((p.raw::jsonb ->> '@context'),'')`
+      : `''`;
+
+    const holderC = presCols.has("holder")
+      ? `coalesce(p.holder,'')`
+      : presCols.has("raw")
+      ? `coalesce(p.raw::jsonb ->> 'holder','')`
+      : `''`;
+
+    await d.query(`
+      CREATE OR REPLACE VIEW "${schema}".idx_all AS
+      -- DIDs
+      SELECT
+        'did'::text AS kind,
+        i.did              AS id,
+        i.did              AS ref,
+        coalesce(i.alias,'') AS title,
+        NULL::text         AS subject,
+        NULL::text         AS issuer,
+        NULL::text         AS holder,
+        NULL::timestamp    AS issued_at
+      FROM "${schema}".identifier i
+
+      UNION ALL
+
+      -- VCs
+      SELECT
+        'vc'::text AS kind,
+        c.hash     AS id,
+        c.hash     AS ref,
+        ${ctxC}    AS title,
+        ${subjC}   AS subject,
+        ${issuerC} AS issuer,
+        NULL::text AS holder,
+        ${issuedC} AS issued_at
+      FROM "${schema}".credential c
+
+      UNION ALL
+
+      -- VPs
+      SELECT
+        'vp'::text AS kind,
+        p.hash     AS id,
+        p.hash     AS ref,
+        ${presCtx} AS title,
+        NULL::text AS subject,
+        NULL::text AS issuer,
+        ${holderC} AS holder,
+        NULL::timestamp AS issued_at
+      FROM "${schema}".presentation p;
+    `);
+  } finally {
+    await d.destroy();
+  }
+}
+
+type SearchOpts = {
+  schema: string;
+  kind?: "did" | "vc" | "vp" | "all";
+  q?: string;
+  limit?: number;
+  offset?: number;
+  orderBy?: "issued_at" | "ref" | "kind";
+  desc?: boolean;
+};
+
+async function searchIndex(opts: SearchOpts) {
+  const {
+    schema,
+    kind = "all",
+    q = "",
+    limit = 10,
+    offset = 0,
+    orderBy = "issued_at",
+    desc = true,
+  } = opts;
+  const d = await ds(schema);
+  try {
+    const where: string[] = [];
+    const params: any[] = [];
+
+    if (kind !== "all") {
+      params.push(kind);
+      where.push(`kind = $${params.length}`);
+    }
+    if (q && q.trim()) {
+      params.push(`%${q.toLowerCase()}%`);
+      where.push(
+        `LOWER(kind || ' ' || ref || ' ' || coalesce(title,'') || ' ' || coalesce(subject,'') || ' ' || coalesce(issuer,'') || ' ' || coalesce(holder,'')) LIKE $${params.length}`
+      );
+    }
+
+    const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const ob = `"${orderBy}" ${desc ? "DESC" : "ASC"}`;
+
+    params.push(limit);
+    const limPos = params.length;
+    params.push(offset);
+    const offPos = params.length;
+
+    const rows = await d.query(
+      `SELECT kind, id, ref, title, subject, issuer, holder, issued_at
+       FROM "${schema}".idx_all
+       ${w}
+       ORDER BY ${ob} NULLS LAST
+       LIMIT $${limPos} OFFSET $${offPos};`,
+      params
+    );
+    return rows as Array<{
+      kind: string;
+      id: string;
+      ref: string;
+      title: string | null;
+      subject: string | null;
+      issuer: string | null;
+      holder: string | null;
+      issued_at: string | null;
+    }>;
+  } finally {
+    await d.destroy();
+  }
+}
+
 async function requestVC(agent: TAgent): Promise<void> {
   const conns = await loadConns();
   const bases = Object.keys(conns);
@@ -315,7 +560,7 @@ async function requestVC(agent: TAgent): Promise<void> {
   const { token, holderDid } = conns[base];
 
   console.log(
-    '\nEnter claims (JSON sau key=value). Ex: {"age":25,"income":9000,"citizenship":"RO"}'
+    '\nEnter claims (JSON sau key=value). Ex: {"age"=25,"income"=9000,"citizenship"="RO"}'
   );
   const first = await promptUser("Claims: ");
   let claims: any = {};
@@ -354,6 +599,77 @@ async function requestVC(agent: TAgent): Promise<void> {
     verifiableCredential: resp.vc,
   });
   console.log(`✅ VC received and saved. Hash: ${saved?.hash || "(ok)"}`);
+}
+
+async function browseIndexInteractive(profile: string): Promise<void> {
+  const schema = schemaFor(profile);
+  await ensureSearchIndexes(schema);
+  await ensureIndexView(schema);
+
+  let kind: "all" | "did" | "vc" | "vp" = "all";
+  let q = "";
+  let page = 0;
+  const pageSize = 10;
+
+  while (true) {
+    const list = await searchIndex({
+      schema,
+      kind,
+      q,
+      limit: pageSize,
+      offset: page * pageSize,
+      orderBy: "issued_at",
+      desc: true,
+    });
+
+    console.log(
+      "\n📚 Index (",
+      kind,
+      q ? `| filter="${q}"` : "",
+      `| page ${page + 1}`,
+      ")"
+    );
+    console.log("─".repeat(80));
+    if (list.length === 0) console.log(" (no results)");
+    list.forEach((r, i) => {
+      if (r.kind === "did") {
+        console.log(
+          `${i + 1}. [DID] ${r.ref}  ${r.title ? `(${r.title})` : ""}`
+        );
+      } else if (r.kind === "vc") {
+        console.log(
+          `${i + 1}. [VC ] ${r.ref}  subj=${r.subject}  issuer=${
+            r.issuer
+          }  issued=${r.issued_at || "-"}`
+        );
+      } else {
+        console.log(`${i + 1}. [VP ] ${r.ref}  holder=${r.holder}`);
+      }
+    });
+    console.log("─".repeat(80));
+
+    const cmd = (
+      await promptUser(
+        "n=next, p=prev, k=kind(all/did/vc/vp), f=filter, q=quit: "
+      )
+    )
+      .trim()
+      .toLowerCase();
+    if (cmd === "n") page++;
+    else if (cmd === "p") page = Math.max(0, page - 1);
+    else if (cmd === "k") {
+      const k = (await promptUser("kind (all|did|vc|vp): "))
+        .trim()
+        .toLowerCase() as any;
+      if (["all", "did", "vc", "vp"].includes(k)) {
+        kind = k;
+        page = 0;
+      }
+    } else if (cmd === "f") {
+      q = (await promptUser("filter text: ")).trim();
+      page = 0;
+    } else if (cmd === "q") break;
+  }
 }
 
 async function listDIDs(agent: TAgent): Promise<void> {
@@ -811,22 +1127,6 @@ async function restoreWallet(): Promise<string | null> {
     [Buffer.from(dump.meta.saltHex, "hex"), dump.meta.passGuard]
   );
 
-  const TABLES = [
-    "wallet_meta",
-    "identifier",
-    "key",
-    "private-key",
-    "service",
-    "credential",
-    "claim",
-    "message",
-    "message_credentials_credential",
-    "message_presentations_presentation",
-    "presentation",
-    "presentation_credentials_credential",
-    "presentation_verifier_identifier",
-  ] as const;
-
   for (const t of TABLES) {
     if (t === "wallet_meta") continue;
     const rows: any[] = dump.tables[t] || [];
@@ -893,6 +1193,8 @@ async function showMenu(): Promise<void> {
   console.log("\n🧰 Backup & Restore:");
   console.log(" 12. 💾 Backup wallet");
   console.log(" 13. ♻️  Restore wallet from file");
+  console.log("\n🔎 Find:");
+  console.log(" 14. 🔎 Browse/Find (DID/VC/VP)");
   console.log("\n❌ 0. Exit");
   console.log(
     "════════════════════════════════════════════════════════════════"
@@ -961,6 +1263,9 @@ async function main(): Promise<void> {
           break;
         case "13":
           await restoreWallet();
+          break;
+        case "14":
+          await browseIndexInteractive(PROFILE);
           break;
         case "0":
           console.log("\n Goodbye!");

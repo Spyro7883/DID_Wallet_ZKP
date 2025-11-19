@@ -23,6 +23,7 @@
     "zk:clean": "rm -rf build/*",
     "access": "npx tsx scripts/access.ts /secret",
     "citizen": "npx tsx scripts/citizen.ts",
+    "institution": "npx tsx scripts/institution.ts",
     "signals:req": "dotenv -e .env -- tsx scripts/request_presentation.ts",
     "signals:watch-requests": "tsx scripts/watch_requests.ts"
   },
