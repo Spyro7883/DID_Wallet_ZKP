@@ -507,6 +507,31 @@ app.post("/issue", async (req, res) => {
   }
 });
 
+app.post("/wallets", async (req, res) => {
+  try {
+    const { profile, passphrase } = req.body || {};
+
+    if (!profile || !passphrase) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    // poți normaliza numele de profil aici dacă vrei (slug etc.)
+    const safeProfile = String(profile).trim();
+
+    console.log(`[wallets] create profile="${safeProfile}"`);
+
+    // AICI refolosești logica ta: setupAgent(profile, pass)
+    // (la fel cum făceai în CLI cu PROFILE + SESSION_PASS)
+    await setupAgent(safeProfile, passphrase);
+
+    // dacă setupAgent nu aruncă eroare, considerăm că wallet-ul este inițializat
+    return res.json({ ok: true, profile: safeProfile });
+  } catch (e: any) {
+    console.error("[wallets] create error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "wallet_create_failed" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`\nVerifier running on http://localhost:${PORT}`);
   console.log(`Circuit: ${CIRCUIT}`);

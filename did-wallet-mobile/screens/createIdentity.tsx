@@ -10,9 +10,14 @@ import {
 import { MaterialIcons } from "@expo/vector-icons";
 import { SafeAreaProvider } from "react-native-safe-area-context"
 import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import type { RootStackParamList } from "../App";
+
+const BASE_URL = "http://localhost:5501";
 
 const CreateIdentity: React.FC = () => {
-    const navigation = useNavigation<any>();
+    const navigation =
+        useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
     const [identityName, setIdentityName] = useState("");
     const [password, setPassword] = useState("");
@@ -20,7 +25,7 @@ const CreateIdentity: React.FC = () => {
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirm, setShowConfirm] = useState(false);
 
-    const handleSubmit = () => {
+    const handleSubmit = async () => {
         if (!identityName) {
             Alert.alert("Error", "Please enter an identity name.");
             return;
@@ -34,9 +39,37 @@ const CreateIdentity: React.FC = () => {
             return;
         }
 
-        console.log("Create identity", { identityName, password });
+        try {
+            const resp = await fetch(`${BASE_URL}/wallets`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    profile: identityName,
+                    passphrase: password,
+                }),
+            });
 
-        navigation.goBack();
+            const json = await resp.json();
+            if (!resp.ok || !json.ok) {
+                Alert.alert(
+                    "Error",
+                    json.error || "Could not create wallet on server."
+                );
+                return;
+            }
+
+            Alert.alert("Success", `Wallet "${json.profile}" created.`);
+            navigation.reset({
+                index: 0,
+                routes: [{ name: "Wallet", params: { profileName: identityName } }],
+            });
+        } catch (e) {
+            console.error(e);
+            Alert.alert(
+                "Error",
+                "Network error while creating wallet. Is the server running?"
+            );
+        }
     };
 
     return (

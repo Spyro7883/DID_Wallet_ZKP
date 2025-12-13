@@ -5,10 +5,12 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
 import Welcome from './screens/welcome';
 import CreateIdentity from './screens/createIdentity';
+import WalletScreen from "./screens/walletScreen";
 
 export type RootStackParamList = {
   Welcome: undefined;
   CreateIdentity: undefined;
+  Wallet: { profileName: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -20,6 +22,7 @@ export default function App() {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         <Stack.Screen name="Welcome" component={Welcome} />
         <Stack.Screen name="CreateIdentity" component={CreateIdentity} />
+        <Stack.Screen name="Wallet" component={WalletScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
