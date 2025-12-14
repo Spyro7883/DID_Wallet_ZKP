@@ -1,15 +1,21 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
     SafeAreaView,
     View,
     Text,
     StyleSheet,
     ScrollView,
+    ActivityIndicator,
     Pressable,
+    Alert,
+    Platform,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
-import type { RootStackParamList } from "../App"; // ajustează path-ul dacă e altul
+import type { RootStackParamList } from "../src/navigation/types";
+import { loadLastWallet } from "../src/storage/walletSession";
+
+type WalletRouteProp = RouteProp<RootStackParamList, "Wallet">;
 
 type WalletItem = {
     id: string;
@@ -18,70 +24,93 @@ type WalletItem = {
     issuedAt: string;
 };
 
-type WalletRouteProp = RouteProp<RootStackParamList, "Wallet">;
+type Summary = {
+    activeDid: string | null;
+    stats: { dids: number; vcs: number; vps: number };
+    recentItems: WalletItem[];
+};
 
-const MOCK_ITEMS: WalletItem[] = [
-    {
-        id: "1",
-        title: "[Credential] EmploymentCredential",
-        subject: "Subject: did:ethr:0x12…ab34",
-        issuedAt: "Issued: 2025-03-01",
-    },
-    {
-        id: "2",
-        title: "[Credential] EmploymentCredential",
-        subject: "Subject: did:ethr:0x12…ab34",
-        issuedAt: "Issued: 2025-03-01",
-    },
-    {
-        id: "3",
-        title: "[Credential] EmploymentCredential",
-        subject: "Subject: did:ethr:0x12…ab34",
-        issuedAt: "Issued: 2025-03-01",
-    },
-];
+const BASE_URL =
+    Platform.OS === "android" ? "http://10.0.2.2:5501" : "http://localhost:5501";
 
-const WalletScreen: React.FC = () => {
+export default function WalletScreen() {
     const route = useRoute<WalletRouteProp>();
     const navigation = useNavigation<any>();
 
-    const profileName = route.params?.profileName ?? "user";
+    const [loading, setLoading] = useState(true);
+    const [summary, setSummary] = useState<Summary | null>(null);
+    const [profileName, setProfileName] = useState<string>("");
 
-    // deocamdată date mock
-    const activeDid = "did:ethr:0x1234…abcd";
-    const stats = { dids: 3, vcs: 5, vps: 2 };
-    const recentItems = MOCK_ITEMS;
+    useEffect(() => {
+        let alive = true;
 
-    const handleOpenSettings = () => {
-        // aici vei naviga spre Settings când îl faci
-        console.log("Open settings");
-    };
+        (async () => {
+            try {
+                setLoading(true);
 
-    const handleOpenWalletItems = () => {
-        // aici vei naviga spre pagina cu toate item-urile
-        console.log("Open wallet items");
-    };
+                const sess = await loadLastWallet();
 
-    const handleViewAll = () => {
-        console.log("View all recent items");
-    };
+                const effectiveProfile = route.params?.profileName ?? sess?.profileName;
 
-    const handlePressItem = (item: WalletItem) => {
-        console.log("Open item:", item.id);
-    };
+                if (!effectiveProfile || !sess?.passphrase) {
+                    navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
+                    return;
+                }
+
+                if (sess.profileName !== effectiveProfile) {
+                    setProfileName(sess.profileName);
+                } else {
+                    setProfileName(effectiveProfile);
+                }
+
+                const resp = await fetch(`${BASE_URL}/wallets/summary`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        profile: sess.profileName,
+                        passphrase: sess.passphrase,
+                        limit: 3,
+                    }),
+                });
+
+                const json = await resp.json();
+                if (!resp.ok || !json.ok) {
+                    throw new Error(json.error || "summary_failed");
+                }
+
+                if (alive) {
+                    setSummary({
+                        activeDid: json.activeDid ?? null,
+                        stats: json.stats ?? { dids: 0, vcs: 0, vps: 0 },
+                        recentItems: json.recentItems ?? [],
+                    });
+                }
+            } catch (e: any) {
+                Alert.alert("Error", e?.message || "Could not load wallet summary");
+            } finally {
+                if (alive) setLoading(false);
+            }
+        })();
+
+        return () => {
+            alive = false;
+        };
+    }, [route.params?.profileName, navigation]);
+
+    const activeDid = summary?.activeDid ?? "No DID yet";
+    const stats = summary?.stats ?? { dids: 0, vcs: 0, vps: 0 };
+    const recentItems = summary?.recentItems ?? [];
 
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={styles.content}>
-                {/* header */}
                 <View style={styles.headerRow}>
                     <Text style={styles.headerTitle}>Wallet: {profileName}</Text>
-                    <Pressable onPress={handleOpenSettings} hitSlop={8}>
+                    <Pressable hitSlop={8}>
                         <MaterialIcons name="settings" size={22} color="#111827" />
                     </Pressable>
                 </View>
 
-                {/* card identitate */}
                 <View style={styles.identityCard}>
                     <Text style={styles.identityName}>{profileName}</Text>
                     <Text style={styles.identityLabel}>Active identity</Text>
@@ -94,67 +123,55 @@ const WalletScreen: React.FC = () => {
                     </View>
                 </View>
 
-                {/* buton mare */}
-                <Pressable
-                    style={styles.primaryButton}
-                    onPress={handleOpenWalletItems}
-                >
+                <Pressable style={styles.primaryButton}>
                     <Text style={styles.primaryButtonText}>Open Wallet Items</Text>
                 </Pressable>
 
-                {/* Recent items header */}
                 <View style={styles.sectionHeader}>
                     <Text style={styles.sectionTitle}>Recent Items</Text>
-                    <Pressable onPress={handleViewAll} hitSlop={4}>
-                        <Text style={styles.sectionLink}>View All</Text>
-                    </Pressable>
+                    <Text style={styles.sectionLink}>View All</Text>
                 </View>
 
-                {/* Lista de iteme */}
-                <View style={styles.itemsList}>
-                    {recentItems.map((item) => (
-                        <Pressable
-                            key={item.id}
-                            style={styles.itemCard}
-                            onPress={() => handlePressItem(item)}
-                        >
-                            <Text style={styles.itemTitle}>{item.title}</Text>
-                            <Text style={styles.itemSubtitle}>
-                                {item.subject} · {item.issuedAt}
+                {loading ? (
+                    <View style={{ paddingVertical: 18 }}>
+                        <ActivityIndicator />
+                    </View>
+                ) : (
+                    <View style={styles.itemsList}>
+                        {recentItems.map((item) => (
+                            <View key={item.id} style={styles.itemCard}>
+                                <Text style={styles.itemTitle}>{item.title}</Text>
+                                <Text style={styles.itemSubtitle}>
+                                    {item.subject} · {item.issuedAt}
+                                </Text>
+                            </View>
+                        ))}
+
+                        {!recentItems.length && (
+                            <Text style={{ color: "#9CA3AF", marginTop: 6 }}>
+                                No credentials yet.
                             </Text>
-                        </Pressable>
-                    ))}
-                </View>
+                        )}
+                    </View>
+                )}
             </ScrollView>
         </SafeAreaView>
     );
-};
-
-export default WalletScreen;
+}
 
 const CARD_BG = "#F9FAFB";
 const ACCENT_BG = "#F3E8FF";
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: "#FFFFFF",
-    },
-    content: {
-        paddingHorizontal: 24,
-        paddingTop: 12,
-        paddingBottom: 24,
-    },
+    container: { flex: 1, backgroundColor: "#FFFFFF" },
+    content: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 24 },
     headerRow: {
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
         marginBottom: 16,
     },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: "600",
-    },
+    headerTitle: { fontSize: 18, fontWeight: "600" },
     identityCard: {
         backgroundColor: CARD_BG,
         borderRadius: 16,
@@ -164,30 +181,15 @@ const styles = StyleSheet.create({
         borderColor: "#E5E7EB",
         marginBottom: 16,
     },
-    identityName: {
-        fontSize: 16,
-        fontWeight: "600",
-        marginBottom: 4,
-    },
-    identityLabel: {
-        fontSize: 12,
-        color: "#6B7280",
-    },
-    identityDid: {
-        fontSize: 12,
-        color: "#4B5563",
-        marginTop: 2,
-        marginBottom: 8,
-    },
+    identityName: { fontSize: 16, fontWeight: "600", marginBottom: 4 },
+    identityLabel: { fontSize: 12, color: "#6B7280" },
+    identityDid: { fontSize: 12, color: "#4B5563", marginTop: 2, marginBottom: 8 },
     identityStatsRow: {
         flexDirection: "row",
         justifyContent: "space-between",
         marginTop: 4,
     },
-    identityStat: {
-        fontSize: 12,
-        color: "#4B5563",
-    },
+    identityStat: { fontSize: 12, color: "#4B5563" },
     primaryButton: {
         backgroundColor: ACCENT_BG,
         borderRadius: 999,
@@ -195,28 +197,16 @@ const styles = StyleSheet.create({
         alignItems: "center",
         marginBottom: 24,
     },
-    primaryButtonText: {
-        fontSize: 15,
-        fontWeight: "500",
-    },
+    primaryButtonText: { fontSize: 15, fontWeight: "500" },
     sectionHeader: {
         flexDirection: "row",
         justifyContent: "space-between",
         alignItems: "center",
         marginBottom: 8,
     },
-    sectionTitle: {
-        fontSize: 14,
-        fontWeight: "600",
-    },
-    sectionLink: {
-        fontSize: 12,
-        color: "#6366F1",
-        fontWeight: "500",
-    },
-    itemsList: {
-        gap: 10,
-    },
+    sectionTitle: { fontSize: 14, fontWeight: "600" },
+    sectionLink: { fontSize: 12, color: "#6366F1", fontWeight: "500" },
+    itemsList: { gap: 10 },
     itemCard: {
         backgroundColor: CARD_BG,
         borderRadius: 12,
@@ -225,13 +215,6 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: "#E5E7EB",
     },
-    itemTitle: {
-        fontSize: 13,
-        fontWeight: "600",
-        marginBottom: 2,
-    },
-    itemSubtitle: {
-        fontSize: 11,
-        color: "#6B7280",
-    },
+    itemTitle: { fontSize: 13, fontWeight: "600", marginBottom: 2 },
+    itemSubtitle: { fontSize: 11, color: "#6B7280" },
 });

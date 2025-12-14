@@ -532,6 +532,66 @@ app.post("/wallets", async (req, res) => {
   }
 });
 
+app.post("/wallets/summary", async (req, res) => {
+  try {
+    const { profile, passphrase, limit } = req.body || {};
+    if (!profile || !passphrase) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    const safeProfile = String(profile).trim();
+    const safeLimit = Number(limit ?? 3);
+
+    const walletAgent = await setupAgent(safeProfile, String(passphrase));
+
+    const dids = await walletAgent.didManagerFind();
+    const vcs = await walletAgent.dataStoreORMGetVerifiableCredentials();
+    const vps = await walletAgent.dataStoreORMGetVerifiablePresentations();
+
+    const activeDid = dids[0]?.did ?? null;
+
+    const recentItems = vcs
+      .map((row: any) => {
+        const vc = row.verifiableCredential;
+        const typeArr = Array.isArray(vc?.type)
+          ? vc.type
+          : [vc?.type].filter(Boolean);
+        const mainType =
+          typeArr.find((t: string) => t !== "VerifiableCredential") ||
+          "VerifiableCredential";
+
+        const subjectId =
+          typeof vc?.credentialSubject === "object"
+            ? vc?.credentialSubject?.id
+            : undefined;
+
+        const issuance = vc?.issuanceDate ? String(vc.issuanceDate) : "";
+
+        return {
+          id: row.hash,
+          title: `[Credential] ${mainType}`,
+          subject: `Subject: ${subjectId ?? "-"}`,
+          issuedAt: issuance ? `Issued: ${issuance.slice(0, 10)}` : "Issued: -",
+          _sort: issuance ? Date.parse(issuance) : 0,
+        };
+      })
+      .sort((a: any, b: any) => b._sort - a._sort)
+      .slice(0, safeLimit)
+      .map(({ _sort, ...x }: any) => x);
+
+    return res.json({
+      ok: true,
+      profile: safeProfile,
+      activeDid,
+      stats: { dids: dids.length, vcs: vcs.length, vps: vps.length },
+      recentItems,
+    });
+  } catch (e: any) {
+    console.error("[wallets/summary] error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "summary_failed" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`\nVerifier running on http://localhost:${PORT}`);
   console.log(`Circuit: ${CIRCUIT}`);

@@ -11,7 +11,8 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { SafeAreaProvider } from "react-native-safe-area-context"
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import type { RootStackParamList } from "../App";
+import type { RootStackParamList } from "../src/navigation/types"; // IMPORTANT
+import { saveLastWallet } from "../src/storage/walletSession";
 
 const BASE_URL = "http://localhost:5501";
 
@@ -59,10 +60,13 @@ const CreateIdentity: React.FC = () => {
             }
 
             Alert.alert("Success", `Wallet "${json.profile}" created.`);
+            await saveLastWallet(json.profile, password);
+
             navigation.reset({
                 index: 0,
-                routes: [{ name: "Wallet", params: { profileName: identityName } }],
+                routes: [{ name: "Wallet", params: { profileName: json.profile } }],
             });
+
         } catch (e) {
             console.error(e);
             Alert.alert(
