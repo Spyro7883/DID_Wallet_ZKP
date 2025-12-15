@@ -5,6 +5,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import Welcome from "./screens/welcome";
 import CreateIdentity from "./screens/createIdentity";
 import WalletScreen from "./screens/walletScreen";
+import WalletItems from "./screens/walletItems";
 
 import type { RootStackParamList } from "./src/navigation/types";
 import { loadLastWallet } from "./src/storage/walletSession";
@@ -41,6 +42,7 @@ export default function App() {
           component={WalletScreen}
           initialParams={initialWalletParams}
         />
+        <Stack.Screen name="WalletItems" component={WalletItems} options={{ headerShown: false }} />
       </Stack.Navigator>
     </NavigationContainer>
   );

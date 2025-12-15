@@ -550,34 +550,68 @@ app.post("/wallets/summary", async (req, res) => {
 
     const activeDid = dids[0]?.did ?? null;
 
-    const recentItems = vcs
-      .map((row: any) => {
-        const vc = row.verifiableCredential;
-        const typeArr = Array.isArray(vc?.type)
-          ? vc.type
-          : [vc?.type].filter(Boolean);
-        const mainType =
-          typeArr.find((t: string) => t !== "VerifiableCredential") ||
-          "VerifiableCredential";
+    const didItems = dids.map((d: any) => ({
+      id: d.did,
+      kind: "did" as const,
+      title: "[DID] " + (d.alias || "identity"),
+      subject: d.did,
+      issuedAt: d.createdAt
+        ? `Created: ${String(d.createdAt).slice(0, 10)}`
+        : "Created: -",
+      _sort: d.createdAt ? Date.parse(String(d.createdAt)) : 0,
+    }));
 
-        const subjectId =
-          typeof vc?.credentialSubject === "object"
-            ? vc?.credentialSubject?.id
-            : undefined;
+    const vcItems = vcs.map((row: any) => {
+      const vc = row.verifiableCredential;
+      const typeArr = Array.isArray(vc?.type)
+        ? vc.type
+        : [vc?.type].filter(Boolean);
+      const mainType =
+        typeArr.find((t: string) => t !== "VerifiableCredential") ||
+        "VerifiableCredential";
 
-        const issuance = vc?.issuanceDate ? String(vc.issuanceDate) : "";
+      const subjectId =
+        typeof vc?.credentialSubject === "object"
+          ? vc?.credentialSubject?.id
+          : undefined;
 
-        return {
-          id: row.hash,
-          title: `[Credential] ${mainType}`,
-          subject: `Subject: ${subjectId ?? "-"}`,
-          issuedAt: issuance ? `Issued: ${issuance.slice(0, 10)}` : "Issued: -",
-          _sort: issuance ? Date.parse(issuance) : 0,
-        };
-      })
-      .sort((a: any, b: any) => b._sort - a._sort)
+      const issuance = vc?.issuanceDate ? String(vc.issuanceDate) : "";
+
+      return {
+        id: row.hash,
+        kind: "vc" as const,
+        title: `[Credential] ${mainType}`,
+        subject: `Subject: ${subjectId ?? "-"}`,
+        issuedAt: issuance ? `Issued: ${issuance.slice(0, 10)}` : "Issued: -",
+        _sort: issuance ? Date.parse(issuance) : 0,
+      };
+    });
+
+    const vpItems = vps.map((row: any) => {
+      const vp = row.verifiablePresentation;
+      const created =
+        (vp as any)?.issuanceDate ||
+        (vp as any)?.createdAt ||
+        row.createdAt ||
+        "";
+      const holder = vp?.holder ?? "-";
+
+      return {
+        id: row.hash,
+        kind: "vp" as const,
+        title: "[Presentation] VP",
+        subject: `Holder: ${holder}`,
+        issuedAt: created
+          ? `Created: ${String(created).slice(0, 10)}`
+          : "Created: -",
+        _sort: created ? Date.parse(String(created)) : 0,
+      };
+    });
+
+    const recentItems = [...vcItems, ...vpItems, ...didItems]
+      .sort((a, b) => b._sort - a._sort)
       .slice(0, safeLimit)
-      .map(({ _sort, ...x }: any) => x);
+      .map(({ _sort, ...x }) => x);
 
     return res.json({
       ok: true,
@@ -592,8 +626,121 @@ app.post("/wallets/summary", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`\nVerifier running on http://localhost:${PORT}`);
+app.post("/wallets/items", async (req, res) => {
+  try {
+    const {
+      profile,
+      passphrase,
+      kind = "all",
+      q = "",
+      limit = 50,
+      offset = 0,
+    } = req.body || {};
+    if (!profile || !passphrase)
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+
+    const safeProfile = String(profile).trim();
+    const walletAgent = await setupAgent(safeProfile, String(passphrase));
+
+    const dids = await walletAgent.didManagerFind();
+    const vcs = await walletAgent.dataStoreORMGetVerifiableCredentials();
+    const vps = await walletAgent.dataStoreORMGetVerifiablePresentations();
+
+    const items: any[] = [];
+
+    // DIDs
+    for (const d of dids) {
+      items.push({
+        kind: "did",
+        id: d.did,
+        title: d.alias || "DID",
+        line1: d.did,
+        line2: `Provider: ${d.provider} · Keys: ${d.keys?.length ?? 0}`,
+        _sort: 0,
+      });
+    }
+
+    // VCs
+    for (const row of vcs) {
+      const vc = row.verifiableCredential;
+      const typeArr = Array.isArray(vc?.type)
+        ? vc.type
+        : [vc?.type].filter(Boolean);
+      const mainType =
+        typeArr.find((t: string) => t !== "VerifiableCredential") ||
+        "VerifiableCredential";
+
+      const subjectId =
+        typeof vc?.credentialSubject === "object"
+          ? vc?.credentialSubject?.id
+          : undefined;
+
+      const issuance = vc?.issuanceDate ? String(vc.issuanceDate) : "";
+      const issuedShort = issuance ? issuance.slice(0, 10) : "-";
+
+      items.push({
+        kind: "vc",
+        id: row.hash,
+        title: mainType,
+        line1: `Subject: ${subjectId ?? "-"}`,
+        line2: `Issued: ${issuedShort}`,
+        _sort: issuance ? Date.parse(issuance) || 0 : 0,
+      });
+    }
+
+    // VPs
+    for (const row of vps) {
+      const vp = row.verifiablePresentation;
+      const holder = vp?.holder ? String(vp.holder) : "-";
+      const vcCount = Array.isArray(vp?.verifiableCredential)
+        ? vp.verifiableCredential.length
+        : 0;
+
+      const created = (vp as any)?.proof?.created
+        ? String((vp as any).proof.created)
+        : "";
+      const createdShort = created ? created.slice(0, 10) : "-";
+
+      items.push({
+        kind: "vp",
+        id: row.hash,
+        title: "VP",
+        line1: `Holder: ${holder}`,
+        line2: `Created: ${createdShort} · VCs: ${vcCount}`,
+        _sort: created ? Date.parse(created) || 0 : 0,
+      });
+    }
+
+    // filter
+    const k = String(kind);
+    let out = items;
+    if (k !== "all") out = out.filter((x) => x.kind === k);
+
+    const qq = String(q || "").toLowerCase();
+    if (qq) {
+      out = out.filter((x) =>
+        `${x.kind} ${x.id} ${x.title} ${x.line1} ${x.line2}`
+          .toLowerCase()
+          .includes(qq)
+      );
+    }
+
+    out.sort((a, b) => (b._sort ?? 0) - (a._sort ?? 0));
+
+    const lim = Math.max(1, Number(limit) || 50);
+    const off = Math.max(0, Number(offset) || 0);
+
+    const page = out.slice(off, off + lim).map(({ _sort, ...x }) => x);
+
+    return res.json({ ok: true, items: page, total: out.length });
+  } catch (e: any) {
+    console.error("[wallets/items] error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "items_failed" });
+  }
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Verifier running on http://0.0.0.0:${PORT}`);
   console.log(`Circuit: ${CIRCUIT}`);
   console.log(`Verification key: ${VK_PATH}`);
 });

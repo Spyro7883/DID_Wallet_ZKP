@@ -863,16 +863,19 @@ async function createVP(agent: TAgent): Promise<void> {
 
   try {
     const holder = await agent.didManagerGet({ did: holderDID });
-    const vpProofFormat = holder.provider === "did:ethr" ? "jwt" : "lds";
     const vp = await agent.createVerifiablePresentation({
       presentation: { holder: holderDID, verifiableCredential: selectedVCs },
-      proofFormat: vpProofFormat,
+      proofFormat: "jwt",
     });
     const filename = `vp_${Date.now()}.json`;
     const filepath = path.join(REST_DIR, filename);
     await fs.mkdir(REST_DIR, { recursive: true });
     await fs.writeFile(filepath, JSON.stringify(vp, null, 2));
     console.log(`Saved VP at: ${filepath}`);
+    const saved = await agent.dataStoreSaveVerifiablePresentation({
+      verifiablePresentation: vp,
+    });
+    console.log(`✅ VP saved in DB. Hash: ${saved?.hash || "(ok)"}`);
   } catch (e: any) {
     console.error("\n Error at VP creation:", e?.message || e);
   }

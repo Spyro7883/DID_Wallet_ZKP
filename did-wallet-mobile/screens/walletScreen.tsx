@@ -30,8 +30,7 @@ type Summary = {
     recentItems: WalletItem[];
 };
 
-const BASE_URL =
-    Platform.OS === "android" ? "http://10.0.2.2:5501" : "http://localhost:5501";
+const BASE_URL = "http://localhost:5501";
 
 export default function WalletScreen() {
     const route = useRoute<WalletRouteProp>();
@@ -123,13 +122,15 @@ export default function WalletScreen() {
                     </View>
                 </View>
 
-                <Pressable style={styles.primaryButton}>
+                <Pressable style={styles.primaryButton} onPress={() => navigation.navigate("WalletItems", { kind: "all" })}>
                     <Text style={styles.primaryButtonText}>Open Wallet Items</Text>
                 </Pressable>
 
                 <View style={styles.sectionHeader}>
                     <Text style={styles.sectionTitle}>Recent Items</Text>
-                    <Text style={styles.sectionLink}>View All</Text>
+                    <Pressable onPress={() => navigation.navigate("WalletItems", { kind: "all" })} hitSlop={4}>
+                        <Text style={styles.sectionLink}>View All</Text>
+                    </Pressable>
                 </View>
 
                 {loading ? (

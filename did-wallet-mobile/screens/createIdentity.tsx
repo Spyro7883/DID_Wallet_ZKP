@@ -6,6 +6,7 @@ import {
     StyleSheet,
     Pressable,
     Alert,
+    Platform
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { SafeAreaProvider } from "react-native-safe-area-context"
