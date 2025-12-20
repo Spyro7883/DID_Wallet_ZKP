@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import crypto from "crypto";
+import * as crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { keccak256, toUtf8Bytes } from "ethers";
 import * as snarkjs from "snarkjs";
@@ -15,6 +15,10 @@ import { sha256 } from "@noble/hashes/sha2.js";
 
 import bs58 from "bs58";
 
+import * as zlib from "node:zlib";
+import { DataSource } from "typeorm";
+import { Entities } from "@veramo/data-store";
+
 const app = express();
 const PORT = 5501;
 
@@ -24,6 +28,79 @@ const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
 
 app.use(cors());
 app.use(express.json());
+
+const TABLES = [
+  "wallet_meta",
+  "identifier",
+  "key",
+  "private-key",
+  "service",
+  "credential",
+  "claim",
+  "message",
+  "message_credentials_credential",
+  "message_presentations_presentation",
+  "presentation",
+  "presentation_credentials_credential",
+  "presentation_verifier_identifier",
+] as const;
+
+const slug = (p: string) =>
+  (p || "default")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+
+const schemaFor = (profile: string) => `wallet_${slug(profile)}`;
+
+const gzip = (b: Buffer) =>
+  new Promise<Buffer>((res, rej) =>
+    zlib.gzip(b, (e, o) => (e ? rej(e) : res(o)))
+  );
+
+async function ds(schema?: string, withEntities = false): Promise<DataSource> {
+  const d = new DataSource({
+    type: "postgres",
+    host: process.env.DB_HOST || "localhost",
+    port: parseInt(process.env.DB_PORT || "5432"),
+    username: process.env.POSTGRESQL_USER,
+    password: process.env.POSTGRESQL_PASS,
+    database: process.env.POSTGRESQL_DB,
+    schema,
+    entities: withEntities ? (Entities as any) : undefined,
+    synchronize: false,
+    logging: ["warn", "error"],
+  } as any);
+
+  if (!d.isInitialized) await d.initialize();
+  return d;
+}
+
+function toSaltBuffer(v: any): Buffer {
+  if (Buffer.isBuffer(v)) return v;
+  if (typeof v === "string") {
+    // de obicei bytea vine Buffer; dacă vine string, încercăm base64/utf8 fallback
+    try {
+      return Buffer.from(v, "base64");
+    } catch {
+      return Buffer.from(v);
+    }
+  }
+  return Buffer.from(v);
+}
+
+function verifyWalletPass(
+  passphrase: string,
+  salt: Buffer,
+  passGuardHex: string
+): boolean {
+  const dk = crypto.scryptSync(passphrase, salt, 32); // N=16384 r=8 p=1 implicit (ca în CLI)
+  const calcGuard = crypto
+    .createHmac("sha256", dk)
+    .update("kms-guard-v1")
+    .digest("hex");
+  return !!passGuardHex && calcGuard === passGuardHex;
+}
 
 type ProofPack = { proof: any; publicSignals: any[] | Record<string, any> };
 type ZkContext = {
@@ -736,6 +813,108 @@ app.post("/wallets/items", async (req, res) => {
   } catch (e: any) {
     console.error("[wallets/items] error:", e?.message || e);
     return res.status(500).json({ ok: false, error: "items_failed" });
+  }
+});
+
+app.post("/wallets/backup", async (req, res) => {
+  try {
+    const { profile, passphrase, backupPassword } = req.body || {};
+    if (!profile || !passphrase) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    const safeProfile = String(profile).trim();
+    const schema = schemaFor(safeProfile);
+
+    // 1) citește meta (salt + pass_guard)
+    const d = await ds(schema);
+    const meta = (
+      await d.query(
+        `SELECT salt, pass_guard FROM "${schema}".wallet_meta LIMIT 1;`
+      )
+    )?.[0];
+
+    if (!meta) {
+      await d.destroy();
+      return res
+        .status(400)
+        .json({ ok: false, error: "wallet_not_initialized" });
+    }
+
+    const saltBuf = toSaltBuffer(meta.salt);
+    const guardHex: string = String(meta.pass_guard || "");
+
+    // 2) verifică passphrase-ul wallet-ului (ca în restoreWallet)
+    if (guardHex && !verifyWalletPass(String(passphrase), saltBuf, guardHex)) {
+      await d.destroy();
+      return res.status(401).json({ ok: false, error: "wrong_passphrase" });
+    }
+
+    // 3) dump tables
+    const dump: any = {
+      version: 1,
+      profile: slug(safeProfile),
+      schema,
+      createdAt: new Date().toISOString(),
+      meta: {
+        saltHex: saltBuf.toString("hex"),
+        passGuard: guardHex,
+        kms: "secretbox+scrypt",
+        kdf: { name: "scrypt", N: 16384, r: 8, p: 1, dkLen: 32 },
+      },
+      tables: {} as Record<string, any[]>,
+    };
+
+    for (const t of TABLES) {
+      dump.tables[t] = await d.query(`SELECT * FROM "${schema}"."${t}";`);
+    }
+    await d.destroy();
+
+    // 4) encrypt backup container
+    const exportPass = backupPassword
+      ? String(backupPassword)
+      : String(passphrase);
+
+    const gz = await gzip(Buffer.from(JSON.stringify(dump), "utf8"));
+    const bkpSalt = crypto.randomBytes(16);
+    const key = crypto.scryptSync(exportPass, bkpSalt, 32);
+    const iv = crypto.randomBytes(12);
+
+    const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+    const ciphertext = Buffer.concat([cipher.update(gz), cipher.final()]);
+    const tag = cipher.getAuthTag();
+
+    const payload = {
+      format: "did-wallet-backup",
+      version: 1,
+      profile: slug(safeProfile),
+      kdf: {
+        name: "scrypt",
+        saltHex: bkpSalt.toString("hex"),
+        N: 16384,
+        r: 8,
+        p: 1,
+        dkLen: 32,
+      },
+      enc: "aes-256-gcm",
+      ivHex: iv.toString("hex"),
+      tagHex: tag.toString("hex"),
+      ciphertextB64: ciphertext.toString("base64"),
+    };
+
+    const filename = `backup_${slug(safeProfile)}_${new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")}.wallet.json`;
+    const contentB64 = Buffer.from(
+      JSON.stringify(payload, null, 2),
+      "utf8"
+    ).toString("base64");
+
+    console.log("[backup] created");
+    return res.json({ ok: true, filename, contentB64 });
+  } catch (e: any) {
+    console.error("[wallets/backup] error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "backup_failed" });
   }
 });
 

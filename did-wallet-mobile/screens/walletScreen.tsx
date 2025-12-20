@@ -14,6 +14,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
 import type { RootStackParamList } from "../src/navigation/types";
 import { loadLastWallet } from "../src/storage/walletSession";
+import SettingsSheet from "./settings";
 
 type WalletRouteProp = RouteProp<RootStackParamList, "Wallet">;
 
@@ -40,6 +41,8 @@ export default function WalletScreen() {
     const [summary, setSummary] = useState<Summary | null>(null);
     const [profileName, setProfileName] = useState<string>("");
 
+    const [settingsOpen, setSettingsOpen] = useState(false); // ✅ ADD
+
     useEffect(() => {
         let alive = true;
 
@@ -56,11 +59,8 @@ export default function WalletScreen() {
                     return;
                 }
 
-                if (sess.profileName !== effectiveProfile) {
-                    setProfileName(sess.profileName);
-                } else {
-                    setProfileName(effectiveProfile);
-                }
+                if (sess.profileName !== effectiveProfile) setProfileName(sess.profileName);
+                else setProfileName(effectiveProfile);
 
                 const resp = await fetch(`${BASE_URL}/wallets/summary`, {
                     method: "POST",
@@ -73,9 +73,7 @@ export default function WalletScreen() {
                 });
 
                 const json = await resp.json();
-                if (!resp.ok || !json.ok) {
-                    throw new Error(json.error || "summary_failed");
-                }
+                if (!resp.ok || !json.ok) throw new Error(json.error || "summary_failed");
 
                 if (alive) {
                     setSummary({
@@ -100,12 +98,42 @@ export default function WalletScreen() {
     const stats = summary?.stats ?? { dids: 0, vcs: 0, vps: 0 };
     const recentItems = summary?.recentItems ?? [];
 
+    const goCreateBackup = () => {
+        setSettingsOpen(false);
+        navigation.navigate("Backup");
+    };
+
+    const goImportBackup = () => {
+        setSettingsOpen(false);
+        navigation.navigate("ImportBackup");
+    };
+
+    const doLogout = () => {
+        setSettingsOpen(false);
+        Alert.alert(
+            "Log out?",
+            "You will need your wallet password to access this identity again.",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Log out",
+                    style: "destructive",
+                    onPress: () => {
+                        navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
+                    },
+                },
+            ]
+        );
+    };
+
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={styles.content}>
                 <View style={styles.headerRow}>
                     <Text style={styles.headerTitle}>Wallet: {profileName}</Text>
-                    <Pressable hitSlop={8}>
+
+                    {/* ✅ onPress deschide modalul */}
+                    <Pressable hitSlop={8} onPress={() => setSettingsOpen(true)}>
                         <MaterialIcons name="settings" size={22} color="#111827" />
                     </Pressable>
                 </View>
@@ -122,13 +150,19 @@ export default function WalletScreen() {
                     </View>
                 </View>
 
-                <Pressable style={styles.primaryButton} onPress={() => navigation.navigate("WalletItems", { kind: "all" })}>
+                <Pressable
+                    style={styles.primaryButton}
+                    onPress={() => navigation.navigate("WalletItems", { kind: "all" })}
+                >
                     <Text style={styles.primaryButtonText}>Open Wallet Items</Text>
                 </Pressable>
 
                 <View style={styles.sectionHeader}>
                     <Text style={styles.sectionTitle}>Recent Items</Text>
-                    <Pressable onPress={() => navigation.navigate("WalletItems", { kind: "all" })} hitSlop={4}>
+                    <Pressable
+                        onPress={() => navigation.navigate("WalletItems", { kind: "all" })}
+                        hitSlop={4}
+                    >
                         <Text style={styles.sectionLink}>View All</Text>
                     </Pressable>
                 </View>
@@ -156,6 +190,15 @@ export default function WalletScreen() {
                     </View>
                 )}
             </ScrollView>
+
+            {/* ✅ modalul */}
+            <SettingsSheet
+                visible={settingsOpen}
+                onClose={() => setSettingsOpen(false)}
+                onCreateBackup={goCreateBackup}
+                onImportBackup={goImportBackup}
+                onLogout={doLogout}
+            />
         </SafeAreaView>
     );
 }

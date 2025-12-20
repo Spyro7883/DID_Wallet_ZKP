@@ -6,6 +6,7 @@ import Welcome from "./screens/welcome";
 import CreateIdentity from "./screens/createIdentity";
 import WalletScreen from "./screens/walletScreen";
 import WalletItems from "./screens/walletItems";
+import BackupScreen from "./screens/backup";
 
 import type { RootStackParamList } from "./src/navigation/types";
 import { loadLastWallet } from "./src/storage/walletSession";
@@ -43,6 +44,7 @@ export default function App() {
           initialParams={initialWalletParams}
         />
         <Stack.Screen name="WalletItems" component={WalletItems} options={{ headerShown: false }} />
+        <Stack.Screen name="Backup" component={BackupScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

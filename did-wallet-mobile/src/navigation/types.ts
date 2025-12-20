@@ -7,4 +7,6 @@ export type RootStackParamList = {
   Wallet: { profileName?: string } | undefined;
 
   WalletItems: { kind?: WalletKind } | undefined;
+  Backup: undefined;
+  ImportBackup: undefined;
 };
