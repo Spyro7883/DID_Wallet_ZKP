@@ -218,14 +218,15 @@ export default function BackupScreen() {
 
             const FS: any = FileSystem;
 
-            const dir: string | null = FS.documentDirectory ?? FS.cacheDirectory;
-            if (!dir) throw new Error("no_writable_directory");
+            const baseDir: string | null = FS.documentDirectory ?? FS.cacheDirectory;
+            if (!baseDir) throw new Error("no_writable_directory");
 
-            const outUri = `${dir}${filename}`;
+            const backupsDir = `${baseDir}backups/`;
+            await FS.makeDirectoryAsync(backupsDir, { intermediates: true }).catch(() => { });
 
-            await FS.writeAsStringAsync(outUri, contentB64, {
-                encoding: FS.EncodingType?.Base64 ?? "base64",
-            });
+            const outUri = `${backupsDir}${filename}`;
+
+            await FS.writeAsStringAsync(outUri, contentB64, { encoding: "base64" });
 
             setCreatedFilename(filename);
             setCreatedFileUri(outUri);

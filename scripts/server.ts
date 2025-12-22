@@ -27,7 +27,7 @@ const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
 const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 
 const TABLES = [
   "wallet_meta",
@@ -264,6 +264,32 @@ async function ensureIssuerDid() {
     });
   }
   ISSUER_DID = issuer.did;
+}
+
+const gunzip = (b: Buffer) =>
+  new Promise<Buffer>((res, rej) =>
+    zlib.gunzip(b, (e, o) => (e ? rej(e) : res(o)))
+  );
+
+async function ensureSchema(schema: string) {
+  const d = await ds();
+  await d.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+  await d.destroy();
+}
+
+async function schemaIsEmpty(schema: string): Promise<boolean> {
+  const d = await ds(schema);
+  try {
+    for (const t of TABLES) {
+      const r = await d
+        .query(`SELECT 1 FROM "${schema}"."${t}" LIMIT 1;`)
+        .catch(() => []);
+      if (Array.isArray(r) && r.length > 0) return false;
+    }
+    return true;
+  } finally {
+    await d.destroy();
+  }
 }
 
 (async () => {
@@ -816,6 +842,29 @@ app.post("/wallets/items", async (req, res) => {
   }
 });
 
+app.get("/wallets/profiles", async (_req, res) => {
+  try {
+    const d = await ds(); // fără schema = conectare la DB
+    const rows = await d.query(`
+      SELECT schema_name
+      FROM information_schema.schemata
+      WHERE schema_name LIKE 'wallet\\_%'
+      ORDER BY schema_name;
+    `);
+    await d.destroy();
+
+    const profiles = (rows || [])
+      .map((r: any) => String(r.schema_name || ""))
+      .map((s: string) => s.replace(/^wallet_/, ""))
+      .filter((p: string) => p && p !== "issuer"); // opțional: ascunde issuer
+
+    return res.json({ ok: true, profiles });
+  } catch (e: any) {
+    console.error("[wallets/profiles] error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "profiles_failed" });
+  }
+});
+
 app.post("/wallets/backup", async (req, res) => {
   try {
     const { profile, passphrase, backupPassword } = req.body || {};
@@ -915,6 +964,150 @@ app.post("/wallets/backup", async (req, res) => {
   } catch (e: any) {
     console.error("[wallets/backup] error:", e?.message || e);
     return res.status(500).json({ ok: false, error: "backup_failed" });
+  }
+});
+
+app.post("/wallets/restore", async (req, res) => {
+  try {
+    const {
+      backup,
+      backupPassword,
+      walletPassphrase,
+      targetProfile,
+      overwrite,
+    } = req.body || {};
+    if (!backup || !backupPassword) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+    if (backup.format !== "did-wallet-backup" || backup.version !== 1) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "invalid_backup_format" });
+    }
+
+    // 1) decrypt container with backupPassword
+    let gz: Buffer;
+    try {
+      const key = crypto.scryptSync(
+        String(backupPassword),
+        Buffer.from(String(backup.kdf.saltHex), "hex"),
+        32
+      );
+      const iv = Buffer.from(String(backup.ivHex), "hex");
+      const tag = Buffer.from(String(backup.tagHex), "hex");
+      const ciphertext = Buffer.from(String(backup.ciphertextB64), "base64");
+
+      const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+      decipher.setAuthTag(tag);
+
+      gz = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    } catch {
+      return res
+        .status(401)
+        .json({ ok: false, error: "wrong_backup_password_or_corrupted" });
+    }
+
+    // 2) gunzip + parse dump
+    let dump: any;
+    try {
+      const raw = await gunzip(gz);
+      dump = JSON.parse(raw.toString("utf8"));
+    } catch {
+      return res
+        .status(400)
+        .json({ ok: false, error: "corrupted_backup_content" });
+    }
+
+    // 3) verify wallet passphrase (pass_guard)
+    // dacă nu trimiți walletPassphrase, folosim backupPassword (pt cazul recommended)
+    const walletPass = String(walletPassphrase || backupPassword);
+
+    try {
+      const salt = Buffer.from(String(dump?.meta?.saltHex || ""), "hex");
+      const guardExpected = String(dump?.meta?.passGuard || "");
+
+      const dk = crypto.scryptSync(walletPass, salt, 32);
+      const calcGuard = crypto
+        .createHmac("sha256", dk)
+        .update("kms-guard-v1")
+        .digest("hex");
+
+      if (!guardExpected || calcGuard !== guardExpected) {
+        return res
+          .status(401)
+          .json({ ok: false, error: "wrong_wallet_password" });
+      }
+    } catch {
+      return res
+        .status(401)
+        .json({ ok: false, error: "wrong_wallet_password" });
+    }
+
+    // 4) target profile + schema
+    const finalProfile = String(
+      targetProfile || dump.profile || backup.profile || "default"
+    ).trim();
+    const schema = schemaFor(finalProfile);
+
+    await ensureSchema(schema);
+
+    // 5) create tables (typeorm synchronize)
+    const dSync = await ds(schema, true);
+    await dSync.synchronize();
+    await dSync.destroy();
+
+    // 6) handle overwrite
+    const empty = await schemaIsEmpty(schema);
+    if (!empty && !overwrite) {
+      return res.status(409).json({ ok: false, error: "profile_exists" });
+    }
+
+    const d = await ds(schema);
+
+    if (!empty && overwrite) {
+      const fq = TABLES.map((t) => `"${schema}"."${t}"`).join(", ");
+      await d.query(`TRUNCATE TABLE ${fq} RESTART IDENTITY CASCADE;`);
+    }
+
+    // 7) insert wallet_meta
+    await d.query(
+      `INSERT INTO "${schema}".wallet_meta (id, salt, pass_guard)
+       VALUES (TRUE, $1, $2)
+       ON CONFLICT (id) DO UPDATE SET salt=EXCLUDED.salt, pass_guard=EXCLUDED.pass_guard;`,
+      [
+        Buffer.from(String(dump.meta.saltHex), "hex"),
+        String(dump.meta.passGuard),
+      ]
+    );
+
+    // 8) insert tables
+    for (const t of TABLES) {
+      if (t === "wallet_meta") continue;
+      const rows: any[] = dump.tables?.[t] || [];
+      if (!rows.length) continue;
+
+      const cols = Object.keys(rows[0]);
+      const colList = cols.map((c) => `"${c}"`).join(", ");
+
+      for (const r of rows) {
+        const vals = cols.map((c) => r[c]);
+        const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
+        await d.query(
+          `INSERT INTO "${schema}"."${t}" (${colList})
+           VALUES (${placeholders})
+           ON CONFLICT DO NOTHING;`,
+          vals
+        );
+      }
+    }
+
+    await d.destroy();
+    return res.json({ ok: true, profile: finalProfile });
+  } catch (e: any) {
+    console.error("[wallets/restore] error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "restore_failed", message: e?.message });
   }
 });
 

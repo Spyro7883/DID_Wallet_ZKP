@@ -31,9 +31,10 @@ const Welcome: React.FC = () => {
                         <Text style={styles.buttonText}>Create new identity</Text>
                     </Pressable>
 
-                    <Pressable style={styles.button} onPress={() => {
-                        console.log("Import identity");
-                    }}>
+                    <Pressable
+                        style={styles.button}
+                        onPress={() => navigation.navigate("ImportBackup")}
+                    >
                         <Text style={styles.buttonText}>Import existing identity</Text>
                     </Pressable>
                 </View>
