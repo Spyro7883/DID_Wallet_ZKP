@@ -17,15 +17,14 @@ import * as FileSystem from "expo-file-system";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
 
+import { BACKUPS_DIR, listLocalBackups } from "../src/storage/backups";
+
 const BASE_URL =
     Platform.OS === "android" ? "http://IP_LAPTOP_LAN:5501" : "http://localhost:5501";
 
 const SESSION_KEY = "last_wallet_session_v1";
 const BASE_DIR =
     (FileSystem as any).documentDirectory ?? (FileSystem as any).cacheDirectory;
-
-const BACKUPS_DIR = BASE_DIR ? `${BASE_DIR}backups/` : null;
-
 
 type BackupContainer = {
     format: "did-wallet-backup";
@@ -66,13 +65,9 @@ function isBackupContainer(x: any): x is BackupContainer {
 }
 
 async function readTextFromUri(uri: string): Promise<string> {
-    // Native: file:// sau uneori content:// (depinde de provider)
     try {
-        return await FileSystem.readAsStringAsync(uri, {
-            encoding: "utf8" as any,
-        });
+        return await (FileSystem as any).readAsStringAsync(uri, { encoding: "utf8" });
     } catch {
-        // fallback (web / unele content://)
         const r = await fetch(uri);
         return await r.text();
     }
@@ -150,25 +145,8 @@ export default function ImportBackupScreen() {
     }, [container, walletName]);
 
     async function refreshDeviceBackups() {
-        try {
-            if (!BACKUPS_DIR) {
-                setDeviceBackups([]);
-                return;
-            }
-            const info = await FileSystem.getInfoAsync(BACKUPS_DIR);
-            if (!info.exists) {
-                setDeviceBackups([]);
-                return;
-            }
-            const files = await FileSystem.readDirectoryAsync(BACKUPS_DIR);
-            const only = files
-                .filter((f) => f.toLowerCase().endsWith(".wallet.json"))
-                .sort()
-                .reverse();
-            setDeviceBackups(only);
-        } catch {
-            setDeviceBackups([]);
-        }
+        const files = await listLocalBackups();
+        setDeviceBackups(files);
     }
 
     useEffect(() => {

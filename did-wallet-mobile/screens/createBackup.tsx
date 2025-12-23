@@ -20,6 +20,7 @@ import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 
 import { loadLastWallet } from "../src/storage/walletSession";
+import { ensureBackupsDir } from "../src/storage/backups";
 
 type Summary = {
     activeDid: string | null;
@@ -216,21 +217,39 @@ export default function BackupScreen() {
             const contentB64: string = json.contentB64;
             if (!contentB64) throw new Error("backup_missing_content");
 
-            const FS: any = FileSystem;
+            // ✅ WEB: descarcă fișierul în Downloads
+            if (Platform.OS === "web") {
+                const bin = atob(contentB64);
+                const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+                const blob = new Blob([bytes], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
 
-            const baseDir: string | null = FS.documentDirectory ?? FS.cacheDirectory;
-            if (!baseDir) throw new Error("no_writable_directory");
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = filename;
+                a.click();
 
-            const backupsDir = `${baseDir}backups/`;
-            await FS.makeDirectoryAsync(backupsDir, { intermediates: true }).catch(() => { });
+                URL.revokeObjectURL(url);
+
+                setCreatedFilename(filename);
+                setCreatedFileUri(null);
+                setSuccessOpen(true);
+                return;
+            }
+
+            // ✅ ANDROID/iOS: salvează în folderul backups/ (ca să fie listat la Import)
+            const backupsDir = `${(FileSystem as any).documentDirectory}backups/`;
+            await (FileSystem as any).makeDirectoryAsync(backupsDir, { intermediates: true });
 
             const outUri = `${backupsDir}${filename}`;
-
-            await FS.writeAsStringAsync(outUri, contentB64, { encoding: "base64" });
+            await (FileSystem as any).writeAsStringAsync(outUri, contentB64, {
+                encoding: (FileSystem as any).EncodingType?.Base64 ?? "base64",
+            });
 
             setCreatedFilename(filename);
             setCreatedFileUri(outUri);
             setSuccessOpen(true);
+
 
         } catch (e: any) {
             Alert.alert("Error", e?.message || "Could not create backup");

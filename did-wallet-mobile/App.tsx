@@ -6,7 +6,7 @@ import Welcome from "./screens/welcome";
 import CreateIdentity from "./screens/createIdentity";
 import WalletScreen from "./screens/walletScreen";
 import WalletItems from "./screens/walletItems";
-import BackupScreen from "./screens/backup";
+import BackupScreen from "./screens/createBackup";
 import ImportBackupScreen from "./screens/importBackup";
 
 import type { RootStackParamList } from "./src/navigation/types";
