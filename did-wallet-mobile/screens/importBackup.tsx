@@ -14,17 +14,13 @@ import {
 import { MaterialIcons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
+import { saveLastWallet } from "../src/storage/walletSession";
 
 import { BACKUPS_DIR, listLocalBackups } from "../src/storage/backups";
 
 const BASE_URL =
     Platform.OS === "android" ? "http://IP_LAPTOP_LAN:5501" : "http://localhost:5501";
-
-const SESSION_KEY = "last_wallet_session_v1";
-const BASE_DIR =
-    (FileSystem as any).documentDirectory ?? (FileSystem as any).cacheDirectory;
 
 type BackupContainer = {
     format: "did-wallet-backup";
@@ -36,20 +32,6 @@ type BackupContainer = {
     tagHex: string;
     ciphertextB64: string;
 };
-
-function slug(p: string) {
-    return (p || "default")
-        .toLowerCase()
-        .replace(/[^a-z0-9_]+/g, "_")
-        .replace(/^_+|_+$/g, "");
-}
-
-async function saveLastWallet(profileName: string, passphrase: string) {
-    await AsyncStorage.setItem(
-        SESSION_KEY,
-        JSON.stringify({ profileName, passphrase, savedAt: Date.now() })
-    );
-}
 
 function isBackupContainer(x: any): x is BackupContainer {
     return (

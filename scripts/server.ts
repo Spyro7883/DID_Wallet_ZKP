@@ -79,7 +79,6 @@ async function ds(schema?: string, withEntities = false): Promise<DataSource> {
 function toSaltBuffer(v: any): Buffer {
   if (Buffer.isBuffer(v)) return v;
   if (typeof v === "string") {
-    // de obicei bytea vine Buffer; dacă vine string, încercăm base64/utf8 fallback
     try {
       return Buffer.from(v, "base64");
     } catch {
@@ -94,7 +93,7 @@ function verifyWalletPass(
   salt: Buffer,
   passGuardHex: string
 ): boolean {
-  const dk = crypto.scryptSync(passphrase, salt, 32); // N=16384 r=8 p=1 implicit (ca în CLI)
+  const dk = crypto.scryptSync(passphrase, salt, 32);
   const calcGuard = crypto
     .createHmac("sha256", dk)
     .update("kms-guard-v1")
@@ -618,16 +617,12 @@ app.post("/wallets", async (req, res) => {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
 
-    // poți normaliza numele de profil aici dacă vrei (slug etc.)
     const safeProfile = String(profile).trim();
 
     console.log(`[wallets] create profile="${safeProfile}"`);
 
-    // AICI refolosești logica ta: setupAgent(profile, pass)
-    // (la fel cum făceai în CLI cu PROFILE + SESSION_PASS)
     await setupAgent(safeProfile, passphrase);
 
-    // dacă setupAgent nu aruncă eroare, considerăm că wallet-ul este inițializat
     return res.json({ ok: true, profile: safeProfile });
   } catch (e: any) {
     console.error("[wallets] create error:", e?.message || e);
@@ -844,7 +839,7 @@ app.post("/wallets/items", async (req, res) => {
 
 app.get("/wallets/profiles", async (_req, res) => {
   try {
-    const d = await ds(); // fără schema = conectare la DB
+    const d = await ds();
     const rows = await d.query(`
       SELECT schema_name
       FROM information_schema.schemata
@@ -856,7 +851,7 @@ app.get("/wallets/profiles", async (_req, res) => {
     const profiles = (rows || [])
       .map((r: any) => String(r.schema_name || ""))
       .map((s: string) => s.replace(/^wallet_/, ""))
-      .filter((p: string) => p && p !== "issuer"); // opțional: ascunde issuer
+      .filter((p: string) => p && p !== "issuer");
 
     return res.json({ ok: true, profiles });
   } catch (e: any) {
@@ -875,7 +870,6 @@ app.post("/wallets/backup", async (req, res) => {
     const safeProfile = String(profile).trim();
     const schema = schemaFor(safeProfile);
 
-    // 1) citește meta (salt + pass_guard)
     const d = await ds(schema);
     const meta = (
       await d.query(
@@ -893,13 +887,11 @@ app.post("/wallets/backup", async (req, res) => {
     const saltBuf = toSaltBuffer(meta.salt);
     const guardHex: string = String(meta.pass_guard || "");
 
-    // 2) verifică passphrase-ul wallet-ului (ca în restoreWallet)
     if (guardHex && !verifyWalletPass(String(passphrase), saltBuf, guardHex)) {
       await d.destroy();
       return res.status(401).json({ ok: false, error: "wrong_passphrase" });
     }
 
-    // 3) dump tables
     const dump: any = {
       version: 1,
       profile: slug(safeProfile),
@@ -919,7 +911,6 @@ app.post("/wallets/backup", async (req, res) => {
     }
     await d.destroy();
 
-    // 4) encrypt backup container
     const exportPass = backupPassword
       ? String(backupPassword)
       : String(passphrase);
@@ -976,6 +967,7 @@ app.post("/wallets/restore", async (req, res) => {
       targetProfile,
       overwrite,
     } = req.body || {};
+
     if (!backup || !backupPassword) {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
@@ -985,7 +977,6 @@ app.post("/wallets/restore", async (req, res) => {
         .json({ ok: false, error: "invalid_backup_format" });
     }
 
-    // 1) decrypt container with backupPassword
     let gz: Buffer;
     try {
       const key = crypto.scryptSync(
@@ -999,7 +990,6 @@ app.post("/wallets/restore", async (req, res) => {
 
       const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
       decipher.setAuthTag(tag);
-
       gz = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     } catch {
       return res
@@ -1007,7 +997,6 @@ app.post("/wallets/restore", async (req, res) => {
         .json({ ok: false, error: "wrong_backup_password_or_corrupted" });
     }
 
-    // 2) gunzip + parse dump
     let dump: any;
     try {
       const raw = await gunzip(gz);
@@ -1018,10 +1007,7 @@ app.post("/wallets/restore", async (req, res) => {
         .json({ ok: false, error: "corrupted_backup_content" });
     }
 
-    // 3) verify wallet passphrase (pass_guard)
-    // dacă nu trimiți walletPassphrase, folosim backupPassword (pt cazul recommended)
     const walletPass = String(walletPassphrase || backupPassword);
-
     try {
       const salt = Buffer.from(String(dump?.meta?.saltHex || ""), "hex");
       const guardExpected = String(dump?.meta?.passGuard || "");
@@ -1043,7 +1029,6 @@ app.post("/wallets/restore", async (req, res) => {
         .json({ ok: false, error: "wrong_wallet_password" });
     }
 
-    // 4) target profile + schema
     const finalProfile = String(
       targetProfile || dump.profile || backup.profile || "default"
     ).trim();
@@ -1051,58 +1036,91 @@ app.post("/wallets/restore", async (req, res) => {
 
     await ensureSchema(schema);
 
-    // 5) create tables (typeorm synchronize)
+    const empty = await schemaIsEmpty(schema);
+    if (!empty && !overwrite) {
+      const d = await ds(schema);
+      try {
+        const meta = (
+          await d.query(
+            `SELECT salt, pass_guard FROM "${schema}".wallet_meta LIMIT 1;`
+          )
+        )?.[0];
+
+        if (!meta?.salt || !meta?.pass_guard) {
+          return res.status(409).json({ ok: false, error: "profile_exists" });
+        }
+
+        const ok = verifyWalletPass(
+          walletPass,
+          toSaltBuffer(meta.salt),
+          String(meta.pass_guard)
+        );
+
+        if (!ok) {
+          return res
+            .status(401)
+            .json({ ok: false, error: "wrong_wallet_password" });
+        }
+
+        return res.json({
+          ok: true,
+          profile: finalProfile,
+          mode: "login_existing",
+        });
+      } finally {
+        await d.destroy();
+      }
+    }
+
     const dSync = await ds(schema, true);
     await dSync.synchronize();
     await dSync.destroy();
 
-    // 6) handle overwrite
-    const empty = await schemaIsEmpty(schema);
-    if (!empty && !overwrite) {
-      return res.status(409).json({ ok: false, error: "profile_exists" });
-    }
-
     const d = await ds(schema);
-
-    if (!empty && overwrite) {
-      const fq = TABLES.map((t) => `"${schema}"."${t}"`).join(", ");
-      await d.query(`TRUNCATE TABLE ${fq} RESTART IDENTITY CASCADE;`);
-    }
-
-    // 7) insert wallet_meta
-    await d.query(
-      `INSERT INTO "${schema}".wallet_meta (id, salt, pass_guard)
-       VALUES (TRUE, $1, $2)
-       ON CONFLICT (id) DO UPDATE SET salt=EXCLUDED.salt, pass_guard=EXCLUDED.pass_guard;`,
-      [
-        Buffer.from(String(dump.meta.saltHex), "hex"),
-        String(dump.meta.passGuard),
-      ]
-    );
-
-    // 8) insert tables
-    for (const t of TABLES) {
-      if (t === "wallet_meta") continue;
-      const rows: any[] = dump.tables?.[t] || [];
-      if (!rows.length) continue;
-
-      const cols = Object.keys(rows[0]);
-      const colList = cols.map((c) => `"${c}"`).join(", ");
-
-      for (const r of rows) {
-        const vals = cols.map((c) => r[c]);
-        const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
-        await d.query(
-          `INSERT INTO "${schema}"."${t}" (${colList})
-           VALUES (${placeholders})
-           ON CONFLICT DO NOTHING;`,
-          vals
-        );
+    try {
+      if (!empty && overwrite) {
+        const fq = TABLES.map((t) => `"${schema}"."${t}"`).join(", ");
+        await d.query(`TRUNCATE TABLE ${fq} RESTART IDENTITY CASCADE;`);
       }
-    }
 
-    await d.destroy();
-    return res.json({ ok: true, profile: finalProfile });
+      await d.query(
+        `INSERT INTO "${schema}".wallet_meta (id, salt, pass_guard)
+         VALUES (TRUE, $1, $2)
+         ON CONFLICT (id) DO UPDATE SET salt=EXCLUDED.salt, pass_guard=EXCLUDED.pass_guard;`,
+        [
+          Buffer.from(String(dump.meta.saltHex), "hex"),
+          String(dump.meta.passGuard),
+        ]
+      );
+
+      for (const t of TABLES) {
+        if (t === "wallet_meta") continue;
+        const rows: any[] = dump.tables?.[t] || [];
+        if (!rows.length) continue;
+
+        const cols = Object.keys(rows[0]);
+        const colList = cols.map((c) => `"${c}"`).join(", ");
+
+        for (const r of rows) {
+          const vals = cols.map((c) => r[c]);
+          const placeholders = cols.map((_, i) => `$${i + 1}`).join(", ");
+          await d.query(
+            `INSERT INTO "${schema}"."${t}" (${colList})
+             VALUES (${placeholders})
+             ON CONFLICT DO NOTHING;`,
+            vals
+          );
+        }
+      }
+
+      return res.json({
+        ok: true,
+        profile: finalProfile,
+        mode: empty ? "restored_new" : "restored_overwrite",
+      });
+    } finally {
+      await d.destroy();
+    }
   } catch (e: any) {
     console.error("[wallets/restore] error:", e?.message || e);
     return res

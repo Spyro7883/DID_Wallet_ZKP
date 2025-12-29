@@ -110,14 +110,14 @@ export default function SettingsSheet({
                         onPress={onCreateBackup}
                         showChevron
                     />
-                    <View style={styles.divider} />
+                    {/* <View style={styles.divider} />
                     <SheetItem
                         title="Import backup"
                         subtitle="Restore from a .wallet.json file"
                         icon="restore"
                         onPress={onImportBackup}
                         showChevron
-                    />
+                    /> */}
                     <View style={styles.divider} />
                     <SheetItem
                         title="Logout"
@@ -134,12 +134,14 @@ export default function SettingsSheet({
 }
 
 const styles = StyleSheet.create({
-    overlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)" },
+    overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.35)" },
     sheet: {
         position: "absolute",
         left: 0,
         right: 0,
         bottom: 0,
+        zIndex: 2,
+
         backgroundColor: "#FFFFFF",
         borderTopLeftRadius: 22,
         borderTopRightRadius: 22,

@@ -13,7 +13,7 @@ import {
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
 import type { RootStackParamList } from "../src/navigation/types";
-import { loadLastWallet } from "../src/storage/walletSession";
+import { loadLastWallet, clearLastWallet } from "../src/storage/walletSession";
 import SettingsSheet from "./settings";
 
 type WalletRouteProp = RouteProp<RootStackParamList, "Wallet">;
@@ -110,21 +110,30 @@ export default function WalletScreen() {
 
     const doLogout = () => {
         setSettingsOpen(false);
+
+        const run = async () => {
+            await clearLastWallet();
+            navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
+        };
+
+        if (Platform.OS === "web") {
+            const ok = window.confirm(
+                "Log out?\nYou will need your wallet password to access this identity again."
+            );
+            if (ok) run();
+            return;
+        }
+
         Alert.alert(
             "Log out?",
             "You will need your wallet password to access this identity again.",
             [
                 { text: "Cancel", style: "cancel" },
-                {
-                    text: "Log out",
-                    style: "destructive",
-                    onPress: () => {
-                        navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
-                    },
-                },
+                { text: "Log out", style: "destructive", onPress: run },
             ]
         );
     };
+
 
     return (
         <SafeAreaView style={styles.container}>
