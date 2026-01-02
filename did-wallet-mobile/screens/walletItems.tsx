@@ -1,4 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
+import { useFocusEffect } from "@react-navigation/native";
+
 import {
     SafeAreaView,
     View,
@@ -15,6 +17,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import type { RootStackParamList, WalletKind } from "../src/navigation/types";
 import { loadLastWallet } from "../src/storage/walletSession";
+import CreateItem from "./createItems";
 
 type RouteT = RouteProp<RootStackParamList, "WalletItems">;
 
@@ -45,13 +48,14 @@ export default function WalletItemsScreen() {
 
     const [loading, setLoading] = useState(true);
     const [items, setItems] = useState<Item[]>([]);
+    const [createOpen, setCreateOpen] = useState(false);
 
     useEffect(() => {
         const t = setTimeout(() => setQDebounced(q.trim()), 250);
         return () => clearTimeout(t);
     }, [q]);
 
-    useEffect(() => {
+    const loadItems = useCallback(() => {
         let alive = true;
 
         (async () => {
@@ -92,6 +96,8 @@ export default function WalletItemsScreen() {
             alive = false;
         };
     }, [kind, qDebounced, navigation]);
+
+    useFocusEffect(loadItems);
 
     const title = useMemo(() => {
         const c = CHIPS.find((x) => x.value === kind);
@@ -136,7 +142,7 @@ export default function WalletItemsScreen() {
 
                 <Text style={styles.headerTitle}>Wallet items</Text>
 
-                <Pressable onPress={() => Alert.alert("TODO", "Add item")} hitSlop={10}>
+                <Pressable onPress={() => setCreateOpen(true)} hitSlop={10}>
                     <MaterialIcons name="add" size={24} color="#111827" />
                 </Pressable>
             </View>
@@ -187,6 +193,23 @@ export default function WalletItemsScreen() {
                     }
                 />
             )}
+            <CreateItem
+                visible={createOpen}
+                onClose={() => setCreateOpen(false)}
+                onCreateDid={() => {
+                    setCreateOpen(false);
+                    navigation.navigate("CreateDid");
+                }}
+                onCreateVc={() => {
+                    setCreateOpen(false);
+                    navigation.navigate("CreateCredential");
+                }}
+                onCreateVp={() => {
+                    setCreateOpen(false);
+                    navigation.navigate("CreatePresentation");
+                }}
+            />
+
         </SafeAreaView>
     );
 }

@@ -9,4 +9,8 @@ export type RootStackParamList = {
   WalletItems: { kind?: WalletKind } | undefined;
   Backup: undefined;
   ImportBackup: undefined;
+
+  CreateDid: undefined;
+  CreateCredential: undefined;
+  CreatePresentation: undefined;
 };

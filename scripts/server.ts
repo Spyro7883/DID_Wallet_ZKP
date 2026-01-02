@@ -958,6 +958,189 @@ app.post("/wallets/backup", async (req, res) => {
   }
 });
 
+app.post("/wallets/dids/create", async (req, res) => {
+  try {
+    const { profile, passphrase, method, alias } = req.body || {};
+    if (!profile || !passphrase) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    const safeProfile = String(profile).trim();
+    const safeMethod = String(method || "key").trim();
+
+    // Acceptă "key" / "ethr" sau "did:key" / "did:ethr"
+    const provider = safeMethod.startsWith("did:")
+      ? safeMethod
+      : `did:${safeMethod}`;
+
+    if (!["did:key", "did:ethr"].includes(provider)) {
+      return res.status(400).json({ ok: false, error: "unsupported_provider" });
+    }
+
+    const walletAgent = await setupAgent(safeProfile, String(passphrase));
+
+    const identifier = await walletAgent.didManagerCreate({
+      provider, // "did:key" sau "did:ethr"
+      kms: "local",
+      alias: alias ? String(alias).trim() : undefined,
+    });
+
+    return res.json({
+      ok: true,
+      did: identifier.did,
+      identifier,
+    });
+  } catch (e: any) {
+    console.error("[wallets/dids/create] error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "create_did_failed", message: e?.message });
+  }
+});
+
+app.post("/wallets/vcs/list", async (req, res) => {
+  try {
+    const { profile, passphrase } = req.body || {};
+    if (!profile || !passphrase)
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+
+    const walletAgent = await setupAgent(
+      String(profile).trim(),
+      String(passphrase)
+    );
+
+    const rows = await walletAgent.dataStoreORMGetVerifiableCredentials();
+
+    const vcs = (rows || []).map((row: any) => {
+      const vc = row.verifiableCredential;
+      const typeArr = Array.isArray(vc?.type)
+        ? vc.type
+        : [vc?.type].filter(Boolean);
+      const mainType =
+        typeArr.find((t: string) => t !== "VerifiableCredential") ||
+        "VerifiableCredential";
+      const subjectId =
+        typeof vc?.credentialSubject === "object"
+          ? vc?.credentialSubject?.id
+          : undefined;
+      const issuance = vc?.issuanceDate ? String(vc.issuanceDate) : "";
+
+      return {
+        hash: row.hash,
+        title: mainType,
+        subjectId: subjectId ?? "-",
+        issuanceDate: issuance ? issuance.slice(0, 10) : "-",
+      };
+    });
+
+    return res.json({ ok: true, vcs });
+  } catch (e: any) {
+    console.error("[wallets/vcs/list] error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "vcs_list_failed" });
+  }
+});
+
+app.post("/wallets/vcs/issue-demo", async (req, res) => {
+  try {
+    const { profile, passphrase, subjectDid, claims, type, validitySeconds } =
+      req.body || {};
+    if (!profile || !passphrase || !subjectDid || typeof claims !== "object") {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    const walletAgent = await setupAgent(
+      String(profile).trim(),
+      String(passphrase)
+    );
+
+    const issuanceDate = new Date().toISOString();
+    const expSec = validitySeconds
+      ? Math.floor(Date.now() / 1000) + Number(validitySeconds)
+      : undefined;
+
+    // VC semnat de issuer (agentul global + ISSUER_DID)
+    const vc = await agent.createVerifiableCredential({
+      credential: {
+        issuer: { id: ISSUER_DID },
+        issuanceDate,
+        expirationDate: expSec
+          ? new Date(expSec * 1000).toISOString()
+          : undefined,
+        type: [
+          "VerifiableCredential",
+          ...(Array.isArray(type) ? type : type ? [type] : ["DemoCredential"]),
+        ],
+        credentialSubject: { id: String(subjectDid), ...(claims || {}) },
+      },
+      proofFormat: "jwt",
+    });
+
+    // salvează VC în wallet
+    const saved = await walletAgent.dataStoreSaveVerifiableCredential({
+      verifiableCredential: vc,
+    });
+
+    return res.json({ ok: true, hash: saved?.hash, vc });
+  } catch (e: any) {
+    console.error("[wallets/vcs/issue-demo] error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "issue_demo_failed", message: e?.message });
+  }
+});
+
+app.post("/wallets/vps/create", async (req, res) => {
+  try {
+    const { profile, passphrase, holderDid, vcHashes } = req.body || {};
+    if (
+      !profile ||
+      !passphrase ||
+      !holderDid ||
+      !Array.isArray(vcHashes) ||
+      vcHashes.length === 0
+    ) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    const walletAgent = await setupAgent(
+      String(profile).trim(),
+      String(passphrase)
+    );
+
+    const rows = await walletAgent.dataStoreORMGetVerifiableCredentials();
+    const byHash = new Map<string, any>();
+    for (const r of rows || [])
+      byHash.set(String(r.hash), r.verifiableCredential);
+
+    const selected = vcHashes
+      .map((h: any) => byHash.get(String(h)))
+      .filter(Boolean);
+
+    if (!selected.length) {
+      return res.status(400).json({ ok: false, error: "no_vcs_found" });
+    }
+
+    const vp = await walletAgent.createVerifiablePresentation({
+      presentation: {
+        holder: String(holderDid),
+        verifiableCredential: selected,
+      },
+      proofFormat: "jwt",
+    });
+
+    const saved = await walletAgent.dataStoreSaveVerifiablePresentation({
+      verifiablePresentation: vp,
+    });
+
+    return res.json({ ok: true, hash: saved?.hash, vp });
+  } catch (e: any) {
+    console.error("[wallets/vps/create] error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "vp_create_failed", message: e?.message });
+  }
+});
+
 app.post("/wallets/restore", async (req, res) => {
   try {
     const {
