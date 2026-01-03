@@ -12,12 +12,15 @@ import {
     ActivityIndicator,
     Alert,
     Platform,
+    Modal,
+    ScrollView
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
 import type { RootStackParamList, WalletKind } from "../src/navigation/types";
 import { loadLastWallet } from "../src/storage/walletSession";
 import CreateItem from "./createItems";
+import { ItemDetailsPopup } from "./itemDetailsPopup";
 
 type RouteT = RouteProp<RootStackParamList, "WalletItems">;
 
@@ -49,6 +52,13 @@ export default function WalletItemsScreen() {
     const [loading, setLoading] = useState(true);
     const [items, setItems] = useState<Item[]>([]);
     const [createOpen, setCreateOpen] = useState(false);
+    const [detailsOpen, setDetailsOpen] = useState(false);
+    const [selected, setSelected] = useState<Item | null>(null);
+
+    const [detailsLoading, setDetailsLoading] = useState(false);
+    const [detailsError, setDetailsError] = useState("");
+    const [detailsData, setDetailsData] = useState<any>(null);
+
 
     useEffect(() => {
         const t = setTimeout(() => setQDebounced(q.trim()), 250);
@@ -109,7 +119,7 @@ export default function WalletItemsScreen() {
         return (
             <Pressable
                 style={styles.card}
-                onPress={() => Alert.alert("TODO", `Open ${item.kind}: ${item.id}`)}
+                onPress={() => openDetails(item)}
             >
                 <View style={styles.cardRow}>
                     <View style={styles.badge}>
@@ -131,6 +141,53 @@ export default function WalletItemsScreen() {
             </Pressable>
         );
     };
+
+    const closeDetails = () => {
+        setDetailsOpen(false);
+        setSelected(null);
+        setDetailsLoading(false);
+        setDetailsError("");
+        setDetailsData(null);
+    };
+
+    const openDetails = useCallback(async (it: Item) => {
+        setSelected(it);
+        setDetailsOpen(true);
+        setDetailsError("");
+        setDetailsData(null);
+
+        try {
+            setDetailsLoading(true);
+
+            const sess = await loadLastWallet();
+            if (!sess?.profileName || !sess?.passphrase) {
+                closeDetails();
+                navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
+                return;
+            }
+
+            const r = await fetch(`${BASE_URL}/wallets/item`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    profile: sess.profileName,
+                    passphrase: sess.passphrase,
+                    kind: it.kind,
+                    id: it.id,
+                }),
+            });
+
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok || !j?.ok) throw new Error(j?.error || "item_failed");
+
+            setDetailsData(j.item);
+        } catch (e: any) {
+            setDetailsError(e?.message || "Could not load item details");
+        } finally {
+            setDetailsLoading(false);
+        }
+    }, [navigation]);
+
 
     return (
         <SafeAreaView style={styles.container}>
@@ -209,6 +266,15 @@ export default function WalletItemsScreen() {
                     navigation.navigate("CreatePresentation");
                 }}
             />
+            <ItemDetailsPopup
+                visible={detailsOpen}
+                item={selected}
+                loading={detailsLoading}
+                error={detailsError}
+                data={detailsData}
+                onClose={closeDetails}
+            />
+
 
         </SafeAreaView>
     );

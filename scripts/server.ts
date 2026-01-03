@@ -116,7 +116,7 @@ const b64uToBytes = (s: string) => new Uint8Array(base64url.decode(s));
 const utf8 = (s: string) => new TextEncoder().encode(s);
 
 function normalizeSecpPub(raw: Uint8Array): Uint8Array {
-  if (raw.length === 33) return raw; // deja comprimată
+  if (raw.length === 33) return raw;
   if (raw.length === 65 && raw[0] === 0x04) {
     return secp.ProjectivePoint.fromHex(raw).toRawBytes(true);
   }
@@ -724,6 +724,91 @@ app.post("/wallets/summary", async (req, res) => {
   }
 });
 
+app.post("/wallets/item", async (req, res) => {
+  try {
+    const { profile, passphrase, kind, id, resolveDidDoc } = req.body || {};
+    if (!profile || !passphrase || !kind || !id) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    const safeProfile = String(profile).trim();
+    const walletAgent = await setupAgent(safeProfile, String(passphrase));
+
+    const k = String(kind);
+
+    if (k === "did") {
+      const did = String(id);
+      const dids = await walletAgent.didManagerFind();
+      const found = dids.find((d: any) => String(d.did) === did);
+      if (!found)
+        return res.status(404).json({ ok: false, error: "did_not_found" });
+
+      let didDoc: any = null;
+      if (resolveDidDoc) {
+        try {
+          didDoc = await walletAgent.resolveDid({ didUrl: did });
+        } catch {
+          didDoc = null;
+        }
+      }
+
+      return res.json({
+        ok: true,
+        item: {
+          kind: "did",
+          id: did,
+          identifier: found,
+          didDoc,
+        },
+      });
+    }
+
+    if (k === "vc") {
+      const hash = String(id);
+      const rows = await walletAgent.dataStoreORMGetVerifiableCredentials();
+      const row = (rows || []).find((r: any) => String(r.hash) === hash);
+      if (!row)
+        return res.status(404).json({ ok: false, error: "vc_not_found" });
+
+      return res.json({
+        ok: true,
+        item: {
+          kind: "vc",
+          id: hash,
+          hash: row.hash,
+          verifiableCredential: row.verifiableCredential,
+          createdAt: row.createdAt ?? null,
+        },
+      });
+    }
+
+    if (k === "vp") {
+      const hash = String(id);
+      const rows = await walletAgent.dataStoreORMGetVerifiablePresentations();
+      const row = (rows || []).find((r: any) => String(r.hash) === hash);
+      if (!row)
+        return res.status(404).json({ ok: false, error: "vp_not_found" });
+
+      return res.json({
+        ok: true,
+        item: {
+          kind: "vp",
+          id: hash,
+          hash: row.hash,
+          verifiablePresentation: row.verifiablePresentation,
+          createdAt: row.createdAt ?? null,
+        },
+      });
+    }
+
+    return res.status(400).json({ ok: false, error: "unsupported_kind" });
+  } catch (e: any) {
+    return res
+      .status(401)
+      .json({ ok: false, error: String(e?.message || "unauthorized") });
+  }
+});
+
 app.post("/wallets/items", async (req, res) => {
   try {
     const {
@@ -746,7 +831,6 @@ app.post("/wallets/items", async (req, res) => {
 
     const items: any[] = [];
 
-    // DIDs
     for (const d of dids) {
       items.push({
         kind: "did",
@@ -758,7 +842,6 @@ app.post("/wallets/items", async (req, res) => {
       });
     }
 
-    // VCs
     for (const row of vcs) {
       const vc = row.verifiableCredential;
       const typeArr = Array.isArray(vc?.type)
@@ -786,7 +869,6 @@ app.post("/wallets/items", async (req, res) => {
       });
     }
 
-    // VPs
     for (const row of vps) {
       const vp = row.verifiablePresentation;
       const holder = vp?.holder ? String(vp.holder) : "-";
@@ -809,7 +891,6 @@ app.post("/wallets/items", async (req, res) => {
       });
     }
 
-    // filter
     const k = String(kind);
     let out = items;
     if (k !== "all") out = out.filter((x) => x.kind === k);
@@ -968,7 +1049,6 @@ app.post("/wallets/dids/create", async (req, res) => {
     const safeProfile = String(profile).trim();
     const safeMethod = String(method || "key").trim();
 
-    // Acceptă "key" / "ethr" sau "did:key" / "did:ethr"
     const provider = safeMethod.startsWith("did:")
       ? safeMethod
       : `did:${safeMethod}`;
@@ -980,7 +1060,7 @@ app.post("/wallets/dids/create", async (req, res) => {
     const walletAgent = await setupAgent(safeProfile, String(passphrase));
 
     const identifier = await walletAgent.didManagerCreate({
-      provider, // "did:key" sau "did:ethr"
+      provider,
       kms: "local",
       alias: alias ? String(alias).trim() : undefined,
     });
@@ -1058,7 +1138,6 @@ app.post("/wallets/vcs/issue-demo", async (req, res) => {
       ? Math.floor(Date.now() / 1000) + Number(validitySeconds)
       : undefined;
 
-    // VC semnat de issuer (agentul global + ISSUER_DID)
     const vc = await agent.createVerifiableCredential({
       credential: {
         issuer: { id: ISSUER_DID },
@@ -1075,7 +1154,6 @@ app.post("/wallets/vcs/issue-demo", async (req, res) => {
       proofFormat: "jwt",
     });
 
-    // salvează VC în wallet
     const saved = await walletAgent.dataStoreSaveVerifiableCredential({
       verifiableCredential: vc,
     });

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
     SafeAreaView,
     View,
@@ -15,10 +15,12 @@ import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
 import type { RootStackParamList } from "../src/navigation/types";
 import { loadLastWallet, clearLastWallet } from "../src/storage/walletSession";
 import SettingsSheet from "./settings";
+import { ItemDetailsPopup } from "./itemDetailsPopup";
 
 type WalletRouteProp = RouteProp<RootStackParamList, "Wallet">;
 
 type WalletItem = {
+    kind: "did" | "vc" | "vp";
     id: string;
     title: string;
     subject: string;
@@ -41,7 +43,13 @@ export default function WalletScreen() {
     const [summary, setSummary] = useState<Summary | null>(null);
     const [profileName, setProfileName] = useState<string>("");
 
-    const [settingsOpen, setSettingsOpen] = useState(false); // ✅ ADD
+    const [settingsOpen, setSettingsOpen] = useState(false);
+
+    const [detailsOpen, setDetailsOpen] = useState(false);
+    const [detailsItem, setDetailsItem] = useState<WalletItem | null>(null);
+    const [detailsLoading, setDetailsLoading] = useState(false);
+    const [detailsError, setDetailsError] = useState("");
+    const [detailsData, setDetailsData] = useState<any>(null);
 
     useEffect(() => {
         let alive = true;
@@ -51,7 +59,6 @@ export default function WalletScreen() {
                 setLoading(true);
 
                 const sess = await loadLastWallet();
-
                 const effectiveProfile = route.params?.profileName ?? sess?.profileName;
 
                 if (!effectiveProfile || !sess?.passphrase) {
@@ -79,7 +86,7 @@ export default function WalletScreen() {
                     setSummary({
                         activeDid: json.activeDid ?? null,
                         stats: json.stats ?? { dids: 0, vcs: 0, vps: 0 },
-                        recentItems: json.recentItems ?? [],
+                        recentItems: (json.recentItems ?? []) as WalletItem[],
                     });
                 }
             } catch (e: any) {
@@ -97,6 +104,12 @@ export default function WalletScreen() {
     const activeDid = summary?.activeDid ?? "No DID yet";
     const stats = summary?.stats ?? { dids: 0, vcs: 0, vps: 0 };
     const recentItems = summary?.recentItems ?? [];
+
+    const recentTitle = useMemo(() => {
+        if (!recentItems.length) return "Recent items";
+        const allVc = recentItems.every((x) => x.kind === "vc");
+        return allVc ? "Verified credentials" : "Recent items";
+    }, [recentItems]);
 
     const goCreateBackup = () => {
         setSettingsOpen(false);
@@ -134,6 +147,42 @@ export default function WalletScreen() {
         );
     };
 
+    const openDetails = async (item: WalletItem) => {
+        setDetailsItem(item);
+        setDetailsOpen(true);
+        setDetailsLoading(true);
+        setDetailsError("");
+        setDetailsData(null);
+
+        try {
+            const sess = await loadLastWallet();
+            if (!sess?.profileName || !sess?.passphrase) {
+                setDetailsOpen(false);
+                navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
+                return;
+            }
+
+            const resp = await fetch(`${BASE_URL}/wallets/item`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    profile: sess.profileName,
+                    passphrase: sess.passphrase,
+                    kind: item.kind,
+                    id: item.id,
+                }),
+            });
+
+            const json = await resp.json().catch(() => ({}));
+            if (!resp.ok || !json.ok) throw new Error(json.error || "details_failed");
+
+            setDetailsData(json.item);
+        } catch (e: any) {
+            setDetailsError(e?.message || "Could not load details");
+        } finally {
+            setDetailsLoading(false);
+        }
+    };
 
     return (
         <SafeAreaView style={styles.container}>
@@ -141,7 +190,6 @@ export default function WalletScreen() {
                 <View style={styles.headerRow}>
                     <Text style={styles.headerTitle}>Wallet: {profileName}</Text>
 
-                    {/* ✅ onPress deschide modalul */}
                     <Pressable hitSlop={8} onPress={() => setSettingsOpen(true)}>
                         <MaterialIcons name="settings" size={22} color="#111827" />
                     </Pressable>
@@ -167,7 +215,7 @@ export default function WalletScreen() {
                 </Pressable>
 
                 <View style={styles.sectionHeader}>
-                    <Text style={styles.sectionTitle}>Recent Items</Text>
+                    <Text style={styles.sectionTitle}>{recentTitle}</Text>
                     <Pressable
                         onPress={() => navigation.navigate("WalletItems", { kind: "all" })}
                         hitSlop={4}
@@ -183,24 +231,40 @@ export default function WalletScreen() {
                 ) : (
                     <View style={styles.itemsList}>
                         {recentItems.map((item) => (
-                            <View key={item.id} style={styles.itemCard}>
-                                <Text style={styles.itemTitle}>{item.title}</Text>
-                                <Text style={styles.itemSubtitle}>
-                                    {item.subject} · {item.issuedAt}
-                                </Text>
-                            </View>
+                            <Pressable
+                                key={`${item.kind}:${item.id}`}
+                                style={styles.itemCard}
+                                onPress={() => openDetails(item)}
+                            >
+                                <View style={styles.cardRow}>
+                                    <View style={styles.badge}>
+                                        <Text style={styles.badgeText}>{item.kind.toUpperCase()}</Text>
+                                    </View>
+
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.itemTitle} numberOfLines={1}>
+                                            {item.title}
+                                        </Text>
+                                        <Text style={styles.itemSubtitle} numberOfLines={1}>
+                                            {item.subject}
+                                        </Text>
+                                        <Text style={styles.itemSubtitle} numberOfLines={1}>
+                                            {item.issuedAt}
+                                        </Text>
+                                    </View>
+                                </View>
+                            </Pressable>
                         ))}
 
                         {!recentItems.length && (
                             <Text style={{ color: "#9CA3AF", marginTop: 6 }}>
-                                No credentials yet.
+                                No items yet.
                             </Text>
                         )}
                     </View>
                 )}
             </ScrollView>
 
-            {/* ✅ modalul */}
             <SettingsSheet
                 visible={settingsOpen}
                 onClose={() => setSettingsOpen(false)}
@@ -208,16 +272,37 @@ export default function WalletScreen() {
                 onImportBackup={goImportBackup}
                 onLogout={doLogout}
             />
+
+            {/* ✅ același popup ca în WalletItems */}
+            <ItemDetailsPopup
+                visible={detailsOpen}
+                item={
+                    detailsItem
+                        ? { kind: detailsItem.kind, id: detailsItem.id, title: detailsItem.title }
+                        : null
+                }
+                loading={detailsLoading}
+                error={detailsError}
+                data={detailsData}
+                onClose={() => {
+                    setDetailsOpen(false);
+                    setDetailsItem(null);
+                    setDetailsError("");
+                    setDetailsData(null);
+                }}
+            />
         </SafeAreaView>
     );
 }
 
 const CARD_BG = "#F9FAFB";
 const ACCENT_BG = "#F3E8FF";
+const BORDER = "#E5E7EB";
 
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: "#FFFFFF" },
     content: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 24 },
+
     headerRow: {
         flexDirection: "row",
         alignItems: "center",
@@ -225,13 +310,14 @@ const styles = StyleSheet.create({
         marginBottom: 16,
     },
     headerTitle: { fontSize: 18, fontWeight: "600" },
+
     identityCard: {
         backgroundColor: CARD_BG,
         borderRadius: 16,
         paddingHorizontal: 16,
         paddingVertical: 14,
         borderWidth: 1,
-        borderColor: "#E5E7EB",
+        borderColor: BORDER,
         marginBottom: 16,
     },
     identityName: { fontSize: 16, fontWeight: "600", marginBottom: 4 },
@@ -243,6 +329,7 @@ const styles = StyleSheet.create({
         marginTop: 4,
     },
     identityStat: { fontSize: 12, color: "#4B5563" },
+
     primaryButton: {
         backgroundColor: ACCENT_BG,
         borderRadius: 999,
@@ -251,6 +338,7 @@ const styles = StyleSheet.create({
         marginBottom: 24,
     },
     primaryButtonText: { fontSize: 15, fontWeight: "500" },
+
     sectionHeader: {
         flexDirection: "row",
         justifyContent: "space-between",
@@ -259,15 +347,28 @@ const styles = StyleSheet.create({
     },
     sectionTitle: { fontSize: 14, fontWeight: "600" },
     sectionLink: { fontSize: 12, color: "#6366F1", fontWeight: "500" },
+
     itemsList: { gap: 10 },
+
     itemCard: {
-        backgroundColor: CARD_BG,
-        borderRadius: 12,
+        backgroundColor: "#FFFFFF",
+        borderRadius: 14,
         paddingHorizontal: 12,
-        paddingVertical: 10,
+        paddingVertical: 12,
         borderWidth: 1,
-        borderColor: "#E5E7EB",
+        borderColor: BORDER,
     },
-    itemTitle: { fontSize: 13, fontWeight: "600", marginBottom: 2 },
-    itemSubtitle: { fontSize: 11, color: "#6B7280" },
+    cardRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
+    badge: {
+        backgroundColor: ACCENT_BG,
+        borderRadius: 10,
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderWidth: 1,
+        borderColor: "#D8B4FE",
+    },
+    badgeText: { fontSize: 11, fontWeight: "700", color: "#111827" },
+
+    itemTitle: { fontSize: 13, fontWeight: "700", color: "#111827" },
+    itemSubtitle: { fontSize: 11, color: "#6B7280", marginTop: 2 },
 });
