@@ -25,15 +25,16 @@
     "citizen": "npx tsx scripts/citizen.ts",
     "institution": "npx tsx scripts/institution.ts",
     "signals:req": "dotenv -e .env -- tsx scripts/request_presentation.ts",
-    "signals:watch-requests": "tsx scripts/watch_requests.ts"
+    "signals:watch-requests": "tsx scripts/watch_requests.ts",
+    "start": "tsx scripts/server.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@noble/curves": "^1.4.0",
     "@noble/ed25519": "^3.0.0",
     "@noble/hashes": "^1.4.0",
-    "@noble/curves": "^1.4.0",
     "@noble/secp256k1": "^3.0.0",
     "@veramo/did-jwt": "^6.0.0",
     "body-parser": "^2.2.0",
@@ -48,6 +49,9 @@
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
     "snarkjs": "^0.7.5",
+    "tsx": "^4.21.0",
+    "typeorm": "^0.3.28",
+    "veramo": "^1.0.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

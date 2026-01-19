@@ -20,11 +20,12 @@ import { DataSource } from "typeorm";
 import { Entities } from "@veramo/data-store";
 
 const app = express();
-const PORT = 5501;
+const PORT = Number(process.env.PORT) || 8080;
+// const PORT == 5501
 
-const CIRCUIT = process.env.CIRCUIT || "aggregate";
-const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
-const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
+// const CIRCUIT = process.env.CIRCUIT || "aggregate";
+// const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
+// const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
@@ -291,13 +292,22 @@ async function schemaIsEmpty(schema: string): Promise<boolean> {
   }
 }
 
-(async () => {
+async function main() {
   agent = await setupAgent(
     "issuer",
     process.env.ISSUER_KMS_PASSPHRASE || "change-me"
   );
   await ensureIssuerDid();
-})();
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on 0.0.0.0:${PORT}`);
+  });
+}
+
+main().catch((e) => {
+  console.error("Fatal startup error:", e);
+  process.exit(1);
+});
 
 setInterval(() => {
   const t = Math.floor(Date.now() / 1000);
@@ -306,115 +316,115 @@ setInterval(() => {
   }
 }, 60_000);
 
-app.post("/present", async (req, res) => {
-  console.log("\n Payload received @/present");
-  console.log(JSON.stringify(req.body, null, 2));
+// app.post("/present", async (req, res) => {
+//   console.log("\n Payload received @/present");
+//   console.log(JSON.stringify(req.body, null, 2));
 
-  try {
-    const { vp, contextId, nonce, zk } = req.body || {};
+//   try {
+//     const { vp, contextId, nonce, zk } = req.body || {};
 
-    if (contextId === undefined || contextId === null)
-      throw new Error("contextId is missing");
-    if (!isPack(zk)) throw new Error("zk pack invalid (proof/publicSignals)");
-    if (nonce) console.log(`Nonce received: ${nonce} (extra security VP)`);
+//     if (contextId === undefined || contextId === null)
+//       throw new Error("contextId is missing");
+//     if (!isPack(zk)) throw new Error("zk pack invalid (proof/publicSignals)");
+//     if (nonce) console.log(`Nonce received: ${nonce} (extra security VP)`);
 
-    console.log("\n Verification ZK proof...");
-    const publicSignalsForVerify = Array.isArray(zk.publicSignals)
-      ? zk.publicSignals
-      : (() => {
-          throw new Error(
-            "publicSignals has to be an array (from public.json) for groth16 verify."
-          );
-        })();
+//     console.log("\n Verification ZK proof...");
+//     const publicSignalsForVerify = Array.isArray(zk.publicSignals)
+//       ? zk.publicSignals
+//       : (() => {
+//           throw new Error(
+//             "publicSignals has to be an array (from public.json) for groth16 verify."
+//           );
+//         })();
 
-    console.log(`publicSignals: ${publicSignalsForVerify.length} elements`);
-    const ok = await snarkjs.groth16.verify(
-      VERIFICATION_KEY,
-      publicSignalsForVerify,
-      zk.proof
-    );
-    if (!ok) throw new Error("zk verification failed");
-    console.log("valid ZK proof");
+//     console.log(`publicSignals: ${publicSignalsForVerify.length} elements`);
+//     const ok = await snarkjs.groth16.verify(
+//       VERIFICATION_KEY,
+//       publicSignalsForVerify,
+//       zk.proof
+//     );
+//     if (!ok) throw new Error("zk verification failed");
+//     console.log("valid ZK proof");
 
-    console.log("\n Structured verification publicSignals...");
-    const allValid = readSignal(zk.publicSignals, "allValid");
-    const privHash = readSignal(zk.publicSignals, "privHash");
-    const agePrivHash = readSignal(zk.publicSignals, "agePrivHash");
-    const citizenshipPrivHash = readSignal(
-      zk.publicSignals,
-      "citizenshipPrivHash"
-    );
-    const incomePrivHash = readSignal(zk.publicSignals, "incomePrivHash");
-    const expectedCitizenship = readSignal(
-      zk.publicSignals,
-      "expectedCitizenship"
-    );
-    const L = readSignal(zk.publicSignals, "L");
-    const U = readSignal(zk.publicSignals, "U");
-    const contextIdPS = readSignal(zk.publicSignals, "contextId");
+//     console.log("\n Structured verification publicSignals...");
+//     const allValid = readSignal(zk.publicSignals, "allValid");
+//     const privHash = readSignal(zk.publicSignals, "privHash");
+//     const agePrivHash = readSignal(zk.publicSignals, "agePrivHash");
+//     const citizenshipPrivHash = readSignal(
+//       zk.publicSignals,
+//       "citizenshipPrivHash"
+//     );
+//     const incomePrivHash = readSignal(zk.publicSignals, "incomePrivHash");
+//     const expectedCitizenship = readSignal(
+//       zk.publicSignals,
+//       "expectedCitizenship"
+//     );
+//     const L = readSignal(zk.publicSignals, "L");
+//     const U = readSignal(zk.publicSignals, "U");
+//     const contextIdPS = readSignal(zk.publicSignals, "contextId");
 
-    console.log(`   [${IDX.allValid}] allValid: ${allValid}`);
-    console.log(`   [${IDX.privHash}] privHash: ${privHash}`);
-    console.log(`   [${IDX.agePrivHash}] agePrivHash: ${agePrivHash}`);
-    console.log(
-      `   [${IDX.citizenshipPrivHash}] citizenshipPrivHash: ${citizenshipPrivHash}`
-    );
-    console.log(`   [${IDX.incomePrivHash}] incomePrivHash: ${incomePrivHash}`);
-    console.log(
-      `   [${IDX.expectedCitizenship}] expectedCitizenship: ${expectedCitizenship}`
-    );
-    console.log(` [${IDX.L}] L (minIncome): ${L}`);
-    console.log(` [${IDX.U}] U (maxIncome): ${U}`);
-    console.log(` [${IDX.contextId}] contextId: ${contextIdPS}`);
+//     console.log(`   [${IDX.allValid}] allValid: ${allValid}`);
+//     console.log(`   [${IDX.privHash}] privHash: ${privHash}`);
+//     console.log(`   [${IDX.agePrivHash}] agePrivHash: ${agePrivHash}`);
+//     console.log(
+//       `   [${IDX.citizenshipPrivHash}] citizenshipPrivHash: ${citizenshipPrivHash}`
+//     );
+//     console.log(`   [${IDX.incomePrivHash}] incomePrivHash: ${incomePrivHash}`);
+//     console.log(
+//       `   [${IDX.expectedCitizenship}] expectedCitizenship: ${expectedCitizenship}`
+//     );
+//     console.log(` [${IDX.L}] L (minIncome): ${L}`);
+//     console.log(` [${IDX.U}] U (maxIncome): ${U}`);
+//     console.log(` [${IDX.contextId}] contextId: ${contextIdPS}`);
 
-    if (allValid === undefined)
-      throw new Error("allValid is missing from publicSignals");
-    if (allValid !== "1" && allValid !== 1)
-      throw new Error(`allValid has to be 1, but it's ${allValid}`);
-    console.log("allValid = 1 (all verifications from circuit have passed)");
+//     if (allValid === undefined)
+//       throw new Error("allValid is missing from publicSignals");
+//     if (allValid !== "1" && allValid !== 1)
+//       throw new Error(`allValid has to be 1, but it's ${allValid}`);
+//     console.log("allValid = 1 (all verifications from circuit have passed)");
 
-    if (contextIdPS === undefined)
-      throw new Error("contextId is missing from publicSignals");
-    if (!eqBig(contextIdPS, contextId)) {
-      throw new Error(
-        `contextId mismatch: expected "${contextId}", got "${contextIdPS}"`
-      );
-    }
-    console.log("contextId match");
+//     if (contextIdPS === undefined)
+//       throw new Error("contextId is missing from publicSignals");
+//     if (!eqBig(contextIdPS, contextId)) {
+//       throw new Error(
+//         `contextId mismatch: expected "${contextId}", got "${contextIdPS}"`
+//       );
+//     }
+//     console.log("contextId match");
 
-    if (!privHash || !agePrivHash || !citizenshipPrivHash || !incomePrivHash) {
-      throw new Error("One or more hashes are missing from publicSignals");
-    }
-    console.log("All present hashes");
+//     if (!privHash || !agePrivHash || !citizenshipPrivHash || !incomePrivHash) {
+//       throw new Error("One or more hashes are missing from publicSignals");
+//     }
+//     console.log("All present hashes");
 
-    console.log("\n Parameters verificated:");
-    console.log(`Citizenship: ${expectedCitizenship}`);
-    console.log(`Income range: [${L}, ${U}]`);
-    console.log(`Context: ${contextId}`);
+//     console.log("\n Parameters verificated:");
+//     console.log(`Citizenship: ${expectedCitizenship}`);
+//     console.log(`Income range: [${L}, ${U}]`);
+//     console.log(`Context: ${contextId}`);
 
-    const { token, exp } = issueToken();
-    const expDate = new Date(exp * 1000).toISOString();
+//     const { token, exp } = issueToken();
+//     const expDate = new Date(exp * 1000).toISOString();
 
-    console.log(`\n Valid payload!`);
-    console.log(`Token issued: ${token.substring(0, 20)}...`);
-    console.log(`Expires at: ${expDate}\n`);
+//     console.log(`\n Valid payload!`);
+//     console.log(`Token issued: ${token.substring(0, 20)}...`);
+//     console.log(`Expires at: ${expDate}\n`);
 
-    res.json({
-      token,
-      exp,
-      status: "verified",
-      verified: {
-        allValid: true,
-        contextId,
-        citizenship: expectedCitizenship,
-        incomeRange: { min: L, max: U },
-      },
-    });
-  } catch (e: any) {
-    console.error("\n Error @/present:", e.message || e);
-    res.status(400).json({ error: String(e?.message ?? e) });
-  }
-});
+//     res.json({
+//       token,
+//       exp,
+//       status: "verified",
+//       verified: {
+//         allValid: true,
+//         contextId,
+//         citizenship: expectedCitizenship,
+//         incomeRange: { min: L, max: U },
+//       },
+//     });
+//   } catch (e: any) {
+//     console.error("\n Error @/present:", e.message || e);
+//     res.status(400).json({ error: String(e?.message ?? e) });
+//   }
+// });
 
 app.post("/requests/register", (req, res) => {
   const { challengeHash, toCommit, context } = req.body || {};
@@ -486,14 +496,14 @@ app.get("/secret", (req, res) => {
   });
 });
 
-app.get("/health", (_req, res) => {
-  res.json({
-    status: "ok",
-    circuit: CIRCUIT,
-    activeTokens: TOKENS.size,
-    timestamp: new Date().toISOString(),
-  });
-});
+// app.get("/health", (_req, res) => {
+//   res.json({
+//     status: "ok",
+//     circuit: CIRCUIT,
+//     activeTokens: TOKENS.size,
+//     timestamp: new Date().toISOString(),
+//   });
+// });
 
 app.get("/connect/challenge", (_req, res) => {
   const id = rid(8);
@@ -1390,8 +1400,10 @@ app.post("/wallets/restore", async (req, res) => {
   }
 });
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Verifier running on http://0.0.0.0:${PORT}`);
-  console.log(`Circuit: ${CIRCUIT}`);
-  console.log(`Verification key: ${VK_PATH}`);
-});
+app.get("/health", (_req, res) => res.status(200).send("ok"));
+
+// app.listen(PORT, "0.0.0.0", () => {
+//   console.log(`Verifier running on http://0.0.0.0:${PORT}`);
+//   // console.log(`Circuit: ${CIRCUIT}`);
+//   // console.log(`Verification key: ${VK_PATH}`);
+// });
