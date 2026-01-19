@@ -1,0 +1,30 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRESQL_USER}
+      POSTGRES_PASSWORD: ${POSTGRESQL_PASS}
+      POSTGRES_DB: ${POSTGRESQL_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  api:
+    build: .
+    environment:
+      HOST: ${HOST}
+      PORT: ${PORT}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      POSTGRESQL_USER: ${POSTGRESQL_USER}
+      POSTGRESQL_PASS: ${POSTGRESQL_PASS}
+      POSTGRESQL_DB: ${POSTGRESQL_DB}
+      ISSUER_KMS_PASSPHRASE: ${ISSUER_KMS_PASSPHRASE}
+    ports:
+      - "${PORT}:${PORT}"
+    depends_on:
+      - db
+    restart: unless-stopped
+
+volumes:
+  pgdata:

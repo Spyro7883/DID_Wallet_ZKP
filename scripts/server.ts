@@ -21,6 +21,9 @@ import { Entities } from "@veramo/data-store";
 
 const app = express();
 const PORT = Number(process.env.PORT) || 8080;
+
+const HOST = process.env.HOST || "0.0.0.0";
+
 // const PORT == 5501
 
 // const CIRCUIT = process.env.CIRCUIT || "aggregate";
@@ -56,7 +59,7 @@ const schemaFor = (profile: string) => `wallet_${slug(profile)}`;
 
 const gzip = (b: Buffer) =>
   new Promise<Buffer>((res, rej) =>
-    zlib.gzip(b, (e, o) => (e ? rej(e) : res(o)))
+    zlib.gzip(b, (e, o) => (e ? rej(e) : res(o))),
   );
 
 async function ds(schema?: string, withEntities = false): Promise<DataSource> {
@@ -92,7 +95,7 @@ function toSaltBuffer(v: any): Buffer {
 function verifyWalletPass(
   passphrase: string,
   salt: Buffer,
-  passGuardHex: string
+  passGuardHex: string,
 ): boolean {
   const dk = crypto.scryptSync(passphrase, salt, 32);
   const calcGuard = crypto
@@ -268,7 +271,7 @@ async function ensureIssuerDid() {
 
 const gunzip = (b: Buffer) =>
   new Promise<Buffer>((res, rej) =>
-    zlib.gunzip(b, (e, o) => (e ? rej(e) : res(o)))
+    zlib.gunzip(b, (e, o) => (e ? rej(e) : res(o))),
   );
 
 async function ensureSchema(schema: string) {
@@ -291,23 +294,6 @@ async function schemaIsEmpty(schema: string): Promise<boolean> {
     await d.destroy();
   }
 }
-
-async function main() {
-  agent = await setupAgent(
-    "issuer",
-    process.env.ISSUER_KMS_PASSPHRASE || "change-me"
-  );
-  await ensureIssuerDid();
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on 0.0.0.0:${PORT}`);
-  });
-}
-
-main().catch((e) => {
-  console.error("Fatal startup error:", e);
-  process.exit(1);
-});
 
 setInterval(() => {
   const t = Math.floor(Date.now() / 1000);
@@ -456,7 +442,7 @@ app.post("/requests/claim", (req, res) => {
   const computed = keccakDidSalt(
     String(did),
     String(salt),
-    String(challengeHash)
+    String(challengeHash),
   ).toLowerCase();
   if (computed !== rec.toCommit)
     return res.status(400).json({ error: "commit_mismatch" });
@@ -484,7 +470,7 @@ app.get("/secret", (req, res) => {
   }
 
   console.log(
-    `/secret: Access granted for token: ${token.substring(0, 20)}...`
+    `/secret: Access granted for token: ${token.substring(0, 20)}...`,
   );
   res.json({
     message: "Access granted to protected resource!",
@@ -511,7 +497,7 @@ app.get("/connect/challenge", (_req, res) => {
   const exp = now() + 5 * 60_000;
   CHALLENGES.set(id, { id, challenge, exp });
   console.log(
-    `[connect] challenge issued id=${id} exp=${new Date(exp).toISOString()}`
+    `[connect] challenge issued id=${id} exp=${new Date(exp).toISOString()}`,
   );
   res.json({ id, challenge, issuerDid: ISSUER_DID, expiresAt: exp });
 });
@@ -520,7 +506,7 @@ app.post("/connect/confirm", async (req, res) => {
   try {
     const { id, holderDid, payload, sig, alg } = req.body || {};
     console.log(
-      `[connect] confirm start id=${id} holder=${holderDid} alg=${alg}`
+      `[connect] confirm start id=${id} holder=${holderDid} alg=${alg}`,
     );
     const ch = CHALLENGES.get(String(id));
     if (!ch || ch.exp < now()) {
@@ -556,8 +542,8 @@ app.post("/connect/confirm", async (req, res) => {
     console.log(
       `[connect] ✅ paired holder=${holderDid} connectionId=${connectionId} token=${token.slice(
         0,
-        8
-      )}…`
+        8,
+      )}…`,
     );
 
     res.json({ connectionId, token, holderDid, issuerDid: ISSUER_DID });
@@ -574,7 +560,7 @@ app.post("/issue", async (req, res) => {
     if (!tok) return res.status(401).json({ error: "missing_token" });
 
     const conn = [...CONNECTIONS.values()].find(
-      (c) => c.token === tok && c.exp > now()
+      (c) => c.token === tok && c.exp > now(),
     );
     if (!conn)
       return res.status(401).json({ error: "invalid_or_expired_token" });
@@ -583,7 +569,7 @@ app.post("/issue", async (req, res) => {
     console.log(
       `[issue] by holder=${conn.holderDid} subject=${subjectDid} types=${
         Array.isArray(type) ? type.join(",") : type || "(none)"
-      }`
+      }`,
     );
     if (!subjectDid || typeof claims !== "object")
       return res.status(400).json({ error: "bad_request" });
@@ -910,7 +896,7 @@ app.post("/wallets/items", async (req, res) => {
       out = out.filter((x) =>
         `${x.kind} ${x.id} ${x.title} ${x.line1} ${x.line2}`
           .toLowerCase()
-          .includes(qq)
+          .includes(qq),
       );
     }
 
@@ -964,7 +950,7 @@ app.post("/wallets/backup", async (req, res) => {
     const d = await ds(schema);
     const meta = (
       await d.query(
-        `SELECT salt, pass_guard FROM "${schema}".wallet_meta LIMIT 1;`
+        `SELECT salt, pass_guard FROM "${schema}".wallet_meta LIMIT 1;`,
       )
     )?.[0];
 
@@ -1038,7 +1024,7 @@ app.post("/wallets/backup", async (req, res) => {
       .replace(/[:.]/g, "-")}.wallet.json`;
     const contentB64 = Buffer.from(
       JSON.stringify(payload, null, 2),
-      "utf8"
+      "utf8",
     ).toString("base64");
 
     console.log("[backup] created");
@@ -1096,7 +1082,7 @@ app.post("/wallets/vcs/list", async (req, res) => {
 
     const walletAgent = await setupAgent(
       String(profile).trim(),
-      String(passphrase)
+      String(passphrase),
     );
 
     const rows = await walletAgent.dataStoreORMGetVerifiableCredentials();
@@ -1140,7 +1126,7 @@ app.post("/wallets/vcs/issue-demo", async (req, res) => {
 
     const walletAgent = await setupAgent(
       String(profile).trim(),
-      String(passphrase)
+      String(passphrase),
     );
 
     const issuanceDate = new Date().toISOString();
@@ -1192,7 +1178,7 @@ app.post("/wallets/vps/create", async (req, res) => {
 
     const walletAgent = await setupAgent(
       String(profile).trim(),
-      String(passphrase)
+      String(passphrase),
     );
 
     const rows = await walletAgent.dataStoreORMGetVerifiableCredentials();
@@ -1253,7 +1239,7 @@ app.post("/wallets/restore", async (req, res) => {
       const key = crypto.scryptSync(
         String(backupPassword),
         Buffer.from(String(backup.kdf.saltHex), "hex"),
-        32
+        32,
       );
       const iv = Buffer.from(String(backup.ivHex), "hex");
       const tag = Buffer.from(String(backup.tagHex), "hex");
@@ -1301,7 +1287,7 @@ app.post("/wallets/restore", async (req, res) => {
     }
 
     const finalProfile = String(
-      targetProfile || dump.profile || backup.profile || "default"
+      targetProfile || dump.profile || backup.profile || "default",
     ).trim();
     const schema = schemaFor(finalProfile);
 
@@ -1313,7 +1299,7 @@ app.post("/wallets/restore", async (req, res) => {
       try {
         const meta = (
           await d.query(
-            `SELECT salt, pass_guard FROM "${schema}".wallet_meta LIMIT 1;`
+            `SELECT salt, pass_guard FROM "${schema}".wallet_meta LIMIT 1;`,
           )
         )?.[0];
 
@@ -1324,7 +1310,7 @@ app.post("/wallets/restore", async (req, res) => {
         const ok = verifyWalletPass(
           walletPass,
           toSaltBuffer(meta.salt),
-          String(meta.pass_guard)
+          String(meta.pass_guard),
         );
 
         if (!ok) {
@@ -1361,7 +1347,7 @@ app.post("/wallets/restore", async (req, res) => {
         [
           Buffer.from(String(dump.meta.saltHex), "hex"),
           String(dump.meta.passGuard),
-        ]
+        ],
       );
 
       for (const t of TABLES) {
@@ -1379,7 +1365,7 @@ app.post("/wallets/restore", async (req, res) => {
             `INSERT INTO "${schema}"."${t}" (${colList})
              VALUES (${placeholders})
              ON CONFLICT DO NOTHING;`,
-            vals
+            vals,
           );
         }
       }
@@ -1407,3 +1393,20 @@ app.get("/health", (_req, res) => res.status(200).send("ok"));
 //   // console.log(`Circuit: ${CIRCUIT}`);
 //   // console.log(`Verification key: ${VK_PATH}`);
 // });
+
+async function main() {
+  agent = await setupAgent(
+    "issuer",
+    process.env.ISSUER_KMS_PASSPHRASE || "change-me",
+  );
+  await ensureIssuerDid();
+
+  app.listen(PORT, HOST, () => {
+    console.log(`Server running on 0.0.0.0:${PORT}`);
+  });
+}
+
+main().catch((e) => {
+  console.error("Fatal startup error:", e);
+  process.exit(1);
+});
