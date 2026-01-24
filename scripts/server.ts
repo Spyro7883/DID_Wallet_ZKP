@@ -20,11 +20,7 @@ import { DataSource } from "typeorm";
 import { Entities } from "@veramo/data-store";
 
 const app = express();
-const PORT = Number(process.env.PORT) || 8080;
-
-const HOST = process.env.HOST || "0.0.0.0";
-
-// const PORT == 5501
+const PORT = 5501;
 
 // const CIRCUIT = process.env.CIRCUIT || "aggregate";
 // const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
@@ -295,6 +291,14 @@ async function schemaIsEmpty(schema: string): Promise<boolean> {
   }
 }
 
+(async () => {
+  agent = await setupAgent(
+    "issuer",
+    process.env.ISSUER_KMS_PASSPHRASE || "change-me",
+  );
+  await ensureIssuerDid();
+})();
+
 setInterval(() => {
   const t = Math.floor(Date.now() / 1000);
   for (const [token, exp] of TOKENS.entries()) {
@@ -319,7 +323,7 @@ setInterval(() => {
 //       ? zk.publicSignals
 //       : (() => {
 //           throw new Error(
-//             "publicSignals has to be an array (from public.json) for groth16 verify."
+//             "publicSignals has to be an array (from public.json) for groth16 verify.",
 //           );
 //         })();
 
@@ -327,7 +331,7 @@ setInterval(() => {
 //     const ok = await snarkjs.groth16.verify(
 //       VERIFICATION_KEY,
 //       publicSignalsForVerify,
-//       zk.proof
+//       zk.proof,
 //     );
 //     if (!ok) throw new Error("zk verification failed");
 //     console.log("valid ZK proof");
@@ -338,12 +342,12 @@ setInterval(() => {
 //     const agePrivHash = readSignal(zk.publicSignals, "agePrivHash");
 //     const citizenshipPrivHash = readSignal(
 //       zk.publicSignals,
-//       "citizenshipPrivHash"
+//       "citizenshipPrivHash",
 //     );
 //     const incomePrivHash = readSignal(zk.publicSignals, "incomePrivHash");
 //     const expectedCitizenship = readSignal(
 //       zk.publicSignals,
-//       "expectedCitizenship"
+//       "expectedCitizenship",
 //     );
 //     const L = readSignal(zk.publicSignals, "L");
 //     const U = readSignal(zk.publicSignals, "U");
@@ -353,11 +357,11 @@ setInterval(() => {
 //     console.log(`   [${IDX.privHash}] privHash: ${privHash}`);
 //     console.log(`   [${IDX.agePrivHash}] agePrivHash: ${agePrivHash}`);
 //     console.log(
-//       `   [${IDX.citizenshipPrivHash}] citizenshipPrivHash: ${citizenshipPrivHash}`
+//       `   [${IDX.citizenshipPrivHash}] citizenshipPrivHash: ${citizenshipPrivHash}`,
 //     );
 //     console.log(`   [${IDX.incomePrivHash}] incomePrivHash: ${incomePrivHash}`);
 //     console.log(
-//       `   [${IDX.expectedCitizenship}] expectedCitizenship: ${expectedCitizenship}`
+//       `   [${IDX.expectedCitizenship}] expectedCitizenship: ${expectedCitizenship}`,
 //     );
 //     console.log(` [${IDX.L}] L (minIncome): ${L}`);
 //     console.log(` [${IDX.U}] U (maxIncome): ${U}`);
@@ -373,7 +377,7 @@ setInterval(() => {
 //       throw new Error("contextId is missing from publicSignals");
 //     if (!eqBig(contextIdPS, contextId)) {
 //       throw new Error(
-//         `contextId mismatch: expected "${contextId}", got "${contextIdPS}"`
+//         `contextId mismatch: expected "${contextId}", got "${contextIdPS}"`,
 //       );
 //     }
 //     console.log("contextId match");
@@ -482,14 +486,14 @@ app.get("/secret", (req, res) => {
   });
 });
 
-// app.get("/health", (_req, res) => {
-//   res.json({
-//     status: "ok",
-//     circuit: CIRCUIT,
-//     activeTokens: TOKENS.size,
-//     timestamp: new Date().toISOString(),
-//   });
-// });
+app.get("/health", (_req, res) => {
+  res.json({
+    status: "ok",
+    // circuit: CIRCUIT,
+    activeTokens: TOKENS.size,
+    timestamp: new Date().toISOString(),
+  });
+});
 
 app.get("/connect/challenge", (_req, res) => {
   const id = rid(8);
@@ -1386,27 +1390,8 @@ app.post("/wallets/restore", async (req, res) => {
   }
 });
 
-app.get("/health", (_req, res) => res.status(200).send("ok"));
-
-// app.listen(PORT, "0.0.0.0", () => {
-//   console.log(`Verifier running on http://0.0.0.0:${PORT}`);
-//   // console.log(`Circuit: ${CIRCUIT}`);
-//   // console.log(`Verification key: ${VK_PATH}`);
-// });
-
-async function main() {
-  agent = await setupAgent(
-    "issuer",
-    process.env.ISSUER_KMS_PASSPHRASE || "change-me",
-  );
-  await ensureIssuerDid();
-
-  app.listen(PORT, HOST, () => {
-    console.log(`Server running on 0.0.0.0:${PORT}`);
-  });
-}
-
-main().catch((e) => {
-  console.error("Fatal startup error:", e);
-  process.exit(1);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Verifier running on http://0.0.0.0:${PORT}`);
+  // console.log(`Circuit: ${CIRCUIT}`);
+  // console.log(`Verification key: ${VK_PATH}`);
 });
