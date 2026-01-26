@@ -33,7 +33,7 @@ type Summary = {
     recentItems: WalletItem[];
 };
 
-const BASE_URL = "http://localhost:5501";
+const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 export default function WalletScreen() {
     const route = useRoute<WalletRouteProp>();

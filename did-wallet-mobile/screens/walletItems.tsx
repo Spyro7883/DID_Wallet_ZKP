@@ -32,7 +32,7 @@ type Item = {
     line2: string;
 };
 
-const BASE_URL = "http://localhost:5501";
+const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 const CHIPS: { label: string; value: WalletKind }[] = [
     { label: "All", value: "all" },

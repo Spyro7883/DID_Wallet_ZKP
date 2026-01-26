@@ -15,8 +15,7 @@ import { useNavigation } from "@react-navigation/native";
 import { loadLastWallet } from "../src/storage/walletSession";
 import { MaterialIcons } from "@expo/vector-icons";
 
-const BASE_URL =
-    Platform.OS === "android" ? "http://IP_LAPTOP_LAN:5501" : "http://localhost:5501";
+const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 type VCListItem = {
     hash: string;

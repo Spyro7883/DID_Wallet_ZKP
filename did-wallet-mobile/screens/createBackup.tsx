@@ -14,8 +14,7 @@ import {
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
-import * as FileSystem from "expo-file-system";
-
+import * as FileSystem from "expo-file-system/legacy";
 
 import * as Sharing from "expo-sharing";
 
@@ -27,10 +26,7 @@ type Summary = {
     stats: { dids: number; vcs: number; vps: number };
 };
 
-const BASE_URL =
-    Platform.OS === "android"
-        ? "http://IP_LAPTOP_LAN:5501"
-        : "http://localhost:5501";
+const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 const CARD_BG = "#F9FAFB";
 const ACCENT_BG = "#F3E8FF";
@@ -238,12 +234,15 @@ export default function BackupScreen() {
             }
 
             // ✅ ANDROID/iOS: salvează în folderul backups/ (ca să fie listat la Import)
-            const backupsDir = `${(FileSystem as any).documentDirectory}backups/`;
-            await (FileSystem as any).makeDirectoryAsync(backupsDir, { intermediates: true });
+            const backupsDir = await ensureBackupsDir();
+            if (!backupsDir) throw new Error("backups_dir_unavailable");
 
-            const outUri = `${backupsDir}${filename}`;
-            await (FileSystem as any).writeAsStringAsync(outUri, contentB64, {
-                encoding: (FileSystem as any).EncodingType?.Base64 ?? "base64",
+            // (opțional) sanitize nume fișier
+            const safeFilename = filename.replace(/[\\/:*?"<>|]/g, "_");
+
+            const outUri = `${backupsDir}${safeFilename}`;
+            await FileSystem.writeAsStringAsync(outUri, contentB64, {
+                encoding: "base64",
             });
 
             setCreatedFilename(filename);

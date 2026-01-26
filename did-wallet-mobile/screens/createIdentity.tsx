@@ -15,7 +15,7 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RootStackParamList } from "../src/navigation/types"; // IMPORTANT
 import { saveLastWallet } from "../src/storage/walletSession";
 
-const BASE_URL = "http://localhost:5501";
+const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 const CreateIdentity: React.FC = () => {
     const navigation =

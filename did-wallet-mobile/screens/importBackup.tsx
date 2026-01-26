@@ -19,8 +19,7 @@ import { saveLastWallet } from "../src/storage/walletSession";
 
 import { BACKUPS_DIR, listLocalBackups } from "../src/storage/backups";
 
-const BASE_URL =
-    Platform.OS === "android" ? "http://IP_LAPTOP_LAN:5501" : "http://localhost:5501";
+const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 type BackupContainer = {
     format: "did-wallet-backup";
