@@ -1,8 +1,8 @@
 "use client";
 
 import { Box, Toolbar } from "@mui/material";
-import Sidebar from "@/src/components/layout/Sidebar";
-import Topbar from "@/src/components/layout/Topbar";
+import Sidebar from "@/components/layout/Sidebar";
+import Topbar from "@/components/layout/Topbar";
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
     return (

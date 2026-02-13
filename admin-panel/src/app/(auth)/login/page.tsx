@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Box, Card, CardContent, TextField, Typography, Button } from "@mui/material";
-import { api } from "@/src/lib/api";
-import { setToken } from "@/src/lib/auth";
+import { api } from "@/lib/api";
+import { setToken } from "@/lib/auth";
 
 export default function LoginPage() {
     const router = useRouter();

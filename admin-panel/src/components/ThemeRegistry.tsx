@@ -3,7 +3,7 @@
 import * as React from "react";
 import { AppRouterCacheProvider } from "@mui/material-nextjs/v15-appRouter";
 import { ThemeProvider, CssBaseline } from "@mui/material";
-import theme from "@/src/theme";
+import theme from "@/theme";
 
 export default function ThemeRegistry({
     children,

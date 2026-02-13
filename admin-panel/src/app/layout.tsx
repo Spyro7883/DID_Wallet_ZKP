@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import ThemeRegistry from "@/src/components/ThemeRegistry";
+import ThemeRegistry from "@/components/ThemeRegistry";
 
 export const metadata: Metadata = {
   title: "Admin Panel",
