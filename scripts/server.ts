@@ -19,6 +19,9 @@ import * as zlib from "node:zlib";
 import { DataSource } from "typeorm";
 import { Entities } from "@veramo/data-store";
 
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
 const app = express();
 const PORT = 5501;
 
@@ -59,6 +62,7 @@ const gzip = (b: Buffer) =>
   );
 
 async function ds(schema?: string, withEntities = false): Promise<DataSource> {
+  const useSsl = String(process.env.DB_SSL || "").toLowerCase() === "true";
   const d = new DataSource({
     type: "postgres",
     host: process.env.DB_HOST || "localhost",
@@ -70,10 +74,44 @@ async function ds(schema?: string, withEntities = false): Promise<DataSource> {
     entities: withEntities ? (Entities as any) : undefined,
     synchronize: false,
     logging: ["warn", "error"],
+    ssl: useSsl ? { rejectUnauthorized: false } : undefined,
   } as any);
 
   if (!d.isInitialized) await d.initialize();
   return d;
+}
+
+async function ensureAdminUsersTable() {
+  const d = await ds(); // fără schema => public
+  try {
+    await d.query(`
+      CREATE TABLE IF NOT EXISTS public.admin_users (
+        id SERIAL PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'admin',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+  } finally {
+    await d.destroy();
+  }
+}
+
+function requireAdmin(req: any, res: any, next: any) {
+  const h = req.headers.authorization || req.headers.Authorization;
+  const m = /Bearer\s+(.+)/i.exec(String(h || ""));
+  const token = m?.[1];
+  if (!token) return res.status(401).send("missing_token");
+
+  try {
+    const secret = process.env.ADMIN_JWT_SECRET!;
+    const payload = jwt.verify(token, secret) as any;
+    (req as any).admin = payload;
+    return next();
+  } catch {
+    return res.status(401).send("invalid_token");
+  }
 }
 
 function toSaltBuffer(v: any): Buffer {
@@ -109,6 +147,12 @@ type ZkContext = {
   U: string | number;
   expiresAt: number;
 };
+
+function signAdminToken(payload: { sub: string; email: string; role: string }) {
+  const secret = process.env.ADMIN_JWT_SECRET;
+  if (!secret) throw new Error("Missing ADMIN_JWT_SECRET");
+  return jwt.sign(payload, secret, { expiresIn: "12h" });
+}
 
 const REQUESTS = new Map<string, { toCommit: string; ctx: ZkContext }>();
 
@@ -292,6 +336,7 @@ async function schemaIsEmpty(schema: string): Promise<boolean> {
 }
 
 (async () => {
+  await ensureAdminUsersTable();
   agent = await setupAgent(
     "issuer",
     process.env.ISSUER_KMS_PASSPHRASE || "change-me",
@@ -1388,6 +1433,51 @@ app.post("/wallets/restore", async (req, res) => {
       .status(500)
       .json({ ok: false, error: "restore_failed", message: e?.message });
   }
+});
+
+app.post("/admin/login", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "")
+      .toLowerCase()
+      .trim();
+    const password = String(req.body?.password || "");
+
+    if (!email || !password) return res.status(400).send("missing_fields");
+
+    const d = await ds(); // public
+    try {
+      const rows = await d.query(
+        `SELECT id, email, password_hash, role
+         FROM public.admin_users
+         WHERE email = $1
+         LIMIT 1;`,
+        [email],
+      );
+
+      const u = rows?.[0];
+      if (!u) return res.status(401).send("invalid_credentials");
+
+      const ok = await bcrypt.compare(password, String(u.password_hash));
+      if (!ok) return res.status(401).send("invalid_credentials");
+
+      const token = signAdminToken({
+        sub: String(u.id),
+        email: String(u.email),
+        role: String(u.role || "admin"),
+      });
+
+      return res.json({ token });
+    } finally {
+      await d.destroy();
+    }
+  } catch (e: any) {
+    console.error("[/admin/login] error:", e?.message || e);
+    return res.status(500).send("server_error");
+  }
+});
+
+app.get("/admin/me", requireAdmin, (req, res) => {
+  res.json({ ok: true, admin: (req as any).admin });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
