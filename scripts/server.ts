@@ -1585,37 +1585,43 @@ app.post("/admin/issuer/set-active", requireAdmin, async (req, res) => {
   }
 });
 
+function issuerAlias(input?: string) {
+  const raw = String(input || "").trim();
+  const s = slug(raw);
+
+  if (!s) return `issuer-${Date.now()}`;
+
+  if (s.startsWith("issuer")) return s;
+
+  return `issuer-${s}`;
+}
+
 app.post("/admin/issuer/create", requireAdmin, async (req, res) => {
   try {
     const provider = String(req.body?.provider || "did:key");
-    const alias = String(req.body?.alias || "").trim();
-    const setActive = req.body?.setActive !== false;
+    const alias = issuerAlias(req.body?.alias);
 
-    if (!["did:key", "did:ethr"].includes(provider)) {
-      return res.status(400).json({ ok: false, error: "unsupported_provider" });
-    }
-
-    const id = await agent.didManagerCreate({
+    const created = await agent.didManagerCreate({
       provider,
       kms: "local",
-      alias: alias || `issuer-${Date.now()}`,
+      alias,
     });
 
-    if (setActive) {
-      ISSUER_DID = id.did;
-      await setSetting("issuer_did", { did: id.did });
-    }
+    ISSUER_DID = created.did;
+    await setSetting("issuer_did", { did: created.did });
 
     return res.json({
       ok: true,
-      created: { did: id.did, alias: id.alias, provider: id.provider },
+      created: {
+        did: created.did,
+        alias: created.alias,
+        provider: created.provider,
+        keys: created.keys?.length ?? 0,
+      },
       activeDid: ISSUER_DID,
     });
   } catch (e: any) {
-    console.error("[/admin/issuer/create] error:", e?.message || e);
-    return res
-      .status(500)
-      .json({ ok: false, error: "create_issuer_failed", message: e?.message });
+    return res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
 

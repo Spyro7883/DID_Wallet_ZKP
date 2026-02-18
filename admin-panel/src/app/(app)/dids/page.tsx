@@ -18,6 +18,7 @@ import {
     MenuItem,
 } from "@mui/material";
 import { api } from "@/lib/api";
+import { InputAdornment } from "@mui/material";
 
 type IssuerRow = {
     did: string;
@@ -77,9 +78,11 @@ export default function Page() {
     };
 
     const createIssuer = async () => {
+        const suffix = alias.trim();
+        const finalAlias = suffix ? `issuer-${suffix}` : undefined;
         await api("/admin/issuer/create", {
             method: "POST",
-            body: JSON.stringify({ provider, alias: alias.trim() || undefined, setActive: true }),
+            body: JSON.stringify({ provider, alias: finalAlias || undefined, setActive: true }),
         });
         setOpen(false);
         setAlias("");
@@ -203,9 +206,23 @@ export default function Page() {
                         <TextField
                             label="Alias (optional)"
                             value={alias}
-                            onChange={(e) => setAlias(e.target.value)}
-                            placeholder="issuer-2026"
+                            onChange={(e) => {
+                                // păstrează doar a-z 0-9 _ -
+                                const v = e.target.value
+                                    .toLowerCase()
+                                    .replace(/[^a-z0-9_-]+/g, "_")
+                                    .replace(/^_+|_+$/g, "");
+                                setAlias(v);
+                            }}
+                            placeholder="test / hr / prod"
+                            helperText="Saved as issuer-<alias>. Leave empty for auto."
+                            InputProps={{
+                                startAdornment: (
+                                    <InputAdornment position="start">issuer-</InputAdornment>
+                                ),
+                            }}
                         />
+
                     </Stack>
                 </DialogContent>
                 <DialogActions>
