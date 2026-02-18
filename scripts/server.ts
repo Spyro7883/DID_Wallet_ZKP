@@ -82,7 +82,7 @@ async function ds(schema?: string, withEntities = false): Promise<DataSource> {
 }
 
 async function ensureAdminUsersTable() {
-  const d = await ds(); // fără schema => public
+  const d = await ds();
   try {
     await d.query(`
       CREATE TABLE IF NOT EXISTS public.admin_users (
@@ -93,6 +93,50 @@ async function ensureAdminUsersTable() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
     `);
+  } finally {
+    await d.destroy();
+  }
+}
+
+async function ensureAdminSettingsTable() {
+  const d = await ds();
+  try {
+    await d.query(`
+      CREATE TABLE IF NOT EXISTS public.admin_settings (
+        key TEXT PRIMARY KEY,
+        value JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+  } finally {
+    await d.destroy();
+  }
+}
+
+async function getSetting<T = any>(key: string): Promise<T | null> {
+  const d = await ds();
+  try {
+    const rows = await d.query(
+      `SELECT value FROM public.admin_settings WHERE key = $1 LIMIT 1`,
+      [key],
+    );
+    return rows?.[0]?.value ?? null;
+  } finally {
+    await d.destroy();
+  }
+}
+
+async function setSetting(key: string, value: any) {
+  const d = await ds();
+  try {
+    await d.query(
+      `
+      INSERT INTO public.admin_settings (key, value)
+      VALUES ($1, $2::jsonb)
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+      `,
+      [key, JSON.stringify(value)],
+    );
   } finally {
     await d.destroy();
   }
@@ -298,6 +342,15 @@ function bearer(req: any) {
 
 async function ensureIssuerDid() {
   const ids = await agent.didManagerFind();
+  const pref = await getSetting<{ did: string }>("issuer_did");
+  if (pref?.did) {
+    const found = ids.find((i: any) => i.did === pref.did);
+    if (found) {
+      ISSUER_DID = found.did;
+      return;
+    }
+  }
+
   let issuer = ids.find((i: any) => i.alias === "issuer");
   if (!issuer) {
     issuer = await agent.didManagerCreate({
@@ -307,6 +360,7 @@ async function ensureIssuerDid() {
     });
   }
   ISSUER_DID = issuer.did;
+  await setSetting("issuer_did", { did: ISSUER_DID });
 }
 
 const gunzip = (b: Buffer) =>
@@ -337,6 +391,8 @@ async function schemaIsEmpty(schema: string): Promise<boolean> {
 
 (async () => {
   await ensureAdminUsersTable();
+  await ensureAdminSettingsTable();
+
   agent = await setupAgent(
     "issuer",
     process.env.ISSUER_KMS_PASSPHRASE || "change-me",
@@ -1473,6 +1529,104 @@ app.post("/admin/login", async (req, res) => {
   } catch (e: any) {
     console.error("[/admin/login] error:", e?.message || e);
     return res.status(500).send("server_error");
+  }
+});
+
+app.get("/admin/issuer", requireAdmin, async (_req, res) => {
+  try {
+    const ids = await agent.didManagerFind();
+    const active = ISSUER_DID;
+
+    const issuerIds = ids
+      .filter((i: any) => String(i.alias || "").startsWith("issuer"))
+      .map((i: any) => ({
+        did: i.did,
+        alias: i.alias || null,
+        provider: i.provider,
+        createdAt: i.createdAt || null,
+        keys: (i.keys || []).map((k: any) => ({
+          kid: k.kid,
+          type: k.type,
+          publicKeyHex: k.publicKeyHex?.slice(0, 16) ?? null,
+        })),
+      }));
+
+    const activeRow = issuerIds.find((x: any) => x.did === active) || null;
+
+    return res.json({
+      ok: true,
+      activeDid: active,
+      active: activeRow,
+      all: issuerIds,
+    });
+  } catch (e: any) {
+    console.error("[/admin/issuer] error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "issuer_failed" });
+  }
+});
+
+app.post("/admin/issuer/set-active", requireAdmin, async (req, res) => {
+  try {
+    const did = String(req.body?.did || "");
+    if (!did) return res.status(400).json({ ok: false, error: "missing_did" });
+
+    const ids = await agent.didManagerFind();
+    const exists = ids.some((i: any) => i.did === did);
+    if (!exists)
+      return res.status(404).json({ ok: false, error: "did_not_found" });
+
+    ISSUER_DID = did;
+    await setSetting("issuer_did", { did });
+
+    return res.json({ ok: true, activeDid: did });
+  } catch (e: any) {
+    console.error("[/admin/issuer/set-active] error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "set_active_failed" });
+  }
+});
+
+app.post("/admin/issuer/create", requireAdmin, async (req, res) => {
+  try {
+    const provider = String(req.body?.provider || "did:key");
+    const alias = String(req.body?.alias || "").trim();
+    const setActive = req.body?.setActive !== false;
+
+    if (!["did:key", "did:ethr"].includes(provider)) {
+      return res.status(400).json({ ok: false, error: "unsupported_provider" });
+    }
+
+    const id = await agent.didManagerCreate({
+      provider,
+      kms: "local",
+      alias: alias || `issuer-${Date.now()}`,
+    });
+
+    if (setActive) {
+      ISSUER_DID = id.did;
+      await setSetting("issuer_did", { did: id.did });
+    }
+
+    return res.json({
+      ok: true,
+      created: { did: id.did, alias: id.alias, provider: id.provider },
+      activeDid: ISSUER_DID,
+    });
+  } catch (e: any) {
+    console.error("[/admin/issuer/create] error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "create_issuer_failed", message: e?.message });
+  }
+});
+
+app.get("/admin/issuer/diddoc", requireAdmin, async (req, res) => {
+  try {
+    const did = String(req.query?.did || ISSUER_DID);
+    const doc = await agent.resolveDid({ didUrl: did });
+    return res.json({ ok: true, did, didDoc: doc });
+  } catch (e: any) {
+    console.error("[/admin/issuer/diddoc] error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "diddoc_failed" });
   }
 });
 
