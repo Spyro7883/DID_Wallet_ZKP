@@ -392,6 +392,7 @@ async function schemaIsEmpty(schema: string): Promise<boolean> {
 (async () => {
   await ensureAdminUsersTable();
   await ensureAdminSettingsTable();
+  await ensureVcIssuanceLogTable();
 
   agent = await setupAgent(
     "issuer",
@@ -1491,6 +1492,31 @@ app.post("/wallets/restore", async (req, res) => {
   }
 });
 
+async function ensureVcIssuanceLogTable() {
+  const d = await ds();
+  try {
+    await d.query(`
+      CREATE TABLE IF NOT EXISTS public.vc_issuance_log (
+        id BIGSERIAL PRIMARY KEY,
+        admin_email TEXT,
+        issuer_did TEXT NOT NULL,
+        subject_did TEXT NOT NULL,
+        vc_type TEXT NOT NULL,
+        claims JSONB NOT NULL DEFAULT '{}'::jsonb,
+        issuance_date TIMESTAMPTZ NOT NULL,
+        expiration_date TIMESTAMPTZ,
+        vc_hash TEXT NOT NULL,
+        vc_jwt TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS vc_issuance_log_subject_idx ON public.vc_issuance_log(subject_did);
+      CREATE INDEX IF NOT EXISTS vc_issuance_log_created_idx ON public.vc_issuance_log(created_at DESC);
+    `);
+  } finally {
+    await d.destroy();
+  }
+}
+
 app.post("/admin/login", async (req, res) => {
   try {
     const email = String(req.body?.email || "")
@@ -1500,7 +1526,7 @@ app.post("/admin/login", async (req, res) => {
 
     if (!email || !password) return res.status(400).send("missing_fields");
 
-    const d = await ds(); // public
+    const d = await ds();
     try {
       const rows = await d.query(
         `SELECT id, email, password_hash, role
@@ -1633,6 +1659,126 @@ app.get("/admin/issuer/diddoc", requireAdmin, async (req, res) => {
   } catch (e: any) {
     console.error("[/admin/issuer/diddoc] error:", e?.message || e);
     return res.status(500).json({ ok: false, error: "diddoc_failed" });
+  }
+});
+
+function hashVcPayload(vc: any) {
+  const raw = typeof vc === "string" ? vc : JSON.stringify(vc);
+  return crypto.createHash("sha256").update(raw, "utf8").digest("hex");
+}
+
+app.post("/admin/vc/issue", requireAdmin, async (req, res) => {
+  try {
+    const subjectDid = String(req.body?.subjectDid || "").trim();
+    const typeIn = req.body?.type;
+    const claims = req.body?.claims;
+
+    const validitySeconds = req.body?.validitySeconds
+      ? Number(req.body.validitySeconds)
+      : undefined;
+
+    if (!subjectDid.startsWith("did:")) {
+      return res.status(400).json({ ok: false, error: "bad_subject_did" });
+    }
+    if (!claims || typeof claims !== "object" || Array.isArray(claims)) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "claims_must_be_object" });
+    }
+
+    const typeArr = Array.isArray(typeIn)
+      ? typeIn
+      : typeIn
+      ? [typeIn]
+      : ["DemoCredential"];
+    const mainType =
+      typeArr.find((t: string) => t !== "VerifiableCredential") || typeArr[0];
+
+    const issuanceDate = new Date().toISOString();
+    const expSec =
+      validitySeconds && Number.isFinite(validitySeconds) && validitySeconds > 0
+        ? Math.floor(Date.now() / 1000) + validitySeconds
+        : undefined;
+
+    const expirationDate = expSec
+      ? new Date(expSec * 1000).toISOString()
+      : undefined;
+
+    const vc = await agent.createVerifiableCredential({
+      credential: {
+        issuer: { id: ISSUER_DID },
+        issuanceDate,
+        expirationDate,
+        type: ["VerifiableCredential", ...typeArr.filter(Boolean)],
+        credentialSubject: { id: subjectDid, ...(claims || {}) },
+      },
+      proofFormat: "jwt",
+    });
+
+    const vcHash = hashVcPayload(vc);
+
+    const adminEmail = (req as any).admin?.email || null;
+
+    const d = await ds();
+    try {
+      await d.query(
+        `INSERT INTO public.vc_issuance_log
+         (admin_email, issuer_did, subject_did, vc_type, claims, issuance_date, expiration_date, vc_hash, vc_jwt)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          adminEmail,
+          ISSUER_DID,
+          subjectDid,
+          String(mainType),
+          JSON.stringify(claims),
+          issuanceDate,
+          expirationDate || null,
+          vcHash,
+          typeof vc === "string" ? vc : JSON.stringify(vc),
+        ],
+      );
+    } finally {
+      await d.destroy();
+    }
+
+    return res.json({
+      ok: true,
+      issuerDid: ISSUER_DID,
+      subjectDid,
+      vcType: String(mainType),
+      issuanceDate,
+      expirationDate: expirationDate || null,
+      vcHash,
+      vc,
+    });
+  } catch (e: any) {
+    console.error("[/admin/vc/issue] error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "issue_failed", message: e?.message });
+  }
+});
+
+app.get("/admin/vc/issued", requireAdmin, async (req, res) => {
+  try {
+    const limit = Math.min(50, Math.max(1, Number(req.query?.limit || 20)));
+
+    const d = await ds();
+    try {
+      const rows = await d.query(
+        `SELECT id, created_at, admin_email, issuer_did, subject_did, vc_type, vc_hash, issuance_date, expiration_date
+         FROM public.vc_issuance_log
+         ORDER BY created_at DESC
+         LIMIT $1`,
+        [limit],
+      );
+
+      return res.json({ ok: true, items: rows });
+    } finally {
+      await d.destroy();
+    }
+  } catch (e: any) {
+    return res.status(500).json({ ok: false, error: "list_failed" });
   }
 });
 

@@ -39,6 +39,9 @@ export default function Page() {
     const [provider, setProvider] = React.useState("did:key");
     const [alias, setAlias] = React.useState("");
 
+    const [creating, setCreating] = React.useState(false);
+    const [settingActiveDid, setSettingActiveDid] = React.useState<string | null>(null);
+
     async function refresh() {
         setLoading(true);
         setErr("");
@@ -73,20 +76,43 @@ export default function Page() {
     };
 
     const setActiveIssuer = async (did: string) => {
-        await api("/admin/issuer/set-active", { method: "POST", body: JSON.stringify({ did }) });
-        await refresh();
+        if (settingActiveDid) return;
+        setSettingActiveDid(did);
+        setErr("");
+        try {
+            await api("/admin/issuer/set-active", {
+                method: "POST",
+                body: JSON.stringify({ did }),
+            });
+            await refresh();
+        } catch (e: any) {
+            setErr(e?.message || "Failed to set active DID");
+        } finally {
+            setSettingActiveDid(null);
+        }
     };
 
     const createIssuer = async () => {
-        const suffix = alias.trim();
-        const finalAlias = suffix ? `issuer-${suffix}` : undefined;
-        await api("/admin/issuer/create", {
-            method: "POST",
-            body: JSON.stringify({ provider, alias: finalAlias || undefined, setActive: true }),
-        });
-        setOpen(false);
-        setAlias("");
-        await refresh();
+        if (creating) return;
+        setCreating(true);
+        setErr("");
+        try {
+            const suffix = alias.trim();
+            const finalAlias = suffix ? `issuer-${suffix}` : undefined;
+
+            await api("/admin/issuer/create", {
+                method: "POST",
+                body: JSON.stringify({ provider, alias: finalAlias, setActive: true }),
+            });
+
+            setOpen(false);
+            setAlias("");
+            await refresh();
+        } catch (e: any) {
+            setErr(e?.message || "Failed to create issuer DID");
+        } finally {
+            setCreating(false);
+        }
     };
 
     return (
@@ -174,9 +200,9 @@ export default function Page() {
                                             size="small"
                                             variant={x.did === activeDid ? "contained" : "outlined"}
                                             onClick={() => setActiveIssuer(x.did)}
-                                            disabled={x.did === activeDid}
+                                            disabled={x.did === activeDid || settingActiveDid === x.did}
                                         >
-                                            {x.did === activeDid ? "Active" : "Set active"}
+                                            {settingActiveDid === x.did ? "Setting..." : x.did === activeDid ? "Active" : "Set active"}
                                         </Button>
                                     </Stack>
                                 </Box>
@@ -198,6 +224,7 @@ export default function Page() {
                             label="Provider"
                             value={provider}
                             onChange={(e) => setProvider(e.target.value)}
+                            disabled={creating}
                         >
                             <MenuItem value="did:key">did:key (recommended)</MenuItem>
                             <MenuItem value="did:ethr">did:ethr (needs chain config)</MenuItem>
@@ -207,7 +234,6 @@ export default function Page() {
                             label="Alias (optional)"
                             value={alias}
                             onChange={(e) => {
-                                // păstrează doar a-z 0-9 _ -
                                 const v = e.target.value
                                     .toLowerCase()
                                     .replace(/[^a-z0-9_-]+/g, "_")
@@ -216,18 +242,23 @@ export default function Page() {
                             }}
                             placeholder="test / hr / prod"
                             helperText="Saved as issuer-<alias>. Leave empty for auto."
-                            InputProps={{
-                                startAdornment: (
-                                    <InputAdornment position="start">issuer-</InputAdornment>
-                                ),
+                            slotProps={{
+                                input: {
+                                    startAdornment: (
+                                        <InputAdornment position="start">issuer-</InputAdornment>
+                                    ),
+                                },
                             }}
+                            disabled={creating}
                         />
 
                     </Stack>
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setOpen(false)}>Cancel</Button>
-                    <Button variant="contained" onClick={createIssuer}>Create</Button>
+                    <Button onClick={() => setOpen(false)} disabled={creating}>Cancel</Button>
+                    <Button variant="contained" onClick={createIssuer} disabled={creating}>
+                        {creating ? "Creating..." : "Create"}
+                    </Button>
                 </DialogActions>
             </Dialog>
         </Box>
