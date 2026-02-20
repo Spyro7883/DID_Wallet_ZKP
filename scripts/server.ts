@@ -309,10 +309,6 @@ const CHALLENGES = new Map<
   string,
   { id: string; challenge: string; exp: number }
 >();
-const CONNECTIONS = new Map<
-  string,
-  { holderDid: string; token: string; exp: number }
->();
 
 const rid = (n = 16) => crypto.randomBytes(n).toString("hex");
 const now = () => Date.now();
@@ -332,12 +328,6 @@ function isValidToken(tok?: string) {
     return false;
   }
   return true;
-}
-function bearer(req: any) {
-  const h = req.headers.authorization || req.headers.Authorization;
-  if (!h) return null;
-  const m = /Bearer\s+(.+)/i.exec(String(h));
-  return m ? m[1] : null;
 }
 
 async function ensureIssuerDid() {
@@ -640,74 +630,215 @@ app.post("/connect/confirm", async (req, res) => {
 
     if (!ok) return res.status(400).json({ error: "bad_signature" });
 
-    const connectionId = rid(8);
-    const token = rid(24);
-    const exp = now() + 24 * 60 * 60_000;
-    CONNECTIONS.set(connectionId, { holderDid, token, exp });
-    CHALLENGES.delete(id);
-    console.log(
-      `[connect] ✅ paired holder=${holderDid} connectionId=${connectionId} token=${token.slice(
-        0,
-        8,
-      )}…`,
-    );
+    const holderToken = signHolderToken({ sub: holderDid, holderDid });
 
-    res.json({ connectionId, token, holderDid, issuerDid: ISSUER_DID });
+    // 2) consumă challenge-ul (nu mai ai nevoie de CONNECTIONS Map)
+    CHALLENGES.delete(String(id));
+
+    console.log(`[connect] ✅ paired holder=${holderDid}`);
+
+    // 3) răspuns
+    return res.json({
+      ok: true,
+      holderDid,
+      issuerDid: ISSUER_DID,
+      token: holderToken,
+      expiresIn: 24 * 60 * 60,
+    });
   } catch (e: any) {
     console.error(`[connect] ❌ verification_failed: ${e?.message || e}`);
     res.status(400).json({ error: "verification_failed", message: e?.message });
   }
 });
 
-app.post("/issue", async (req, res) => {
+const VC_POLICY: Record<
+  string,
+  {
+    allowedClaims: string[];
+    requiredClaims: string[];
+    maxValidityDays: number;
+  }
+> = {
+  AgeCredential: {
+    allowedClaims: ["dateOfBirth"],
+    requiredClaims: ["dateOfBirth"],
+    maxValidityDays: 3650,
+  },
+  CitizenshipCredential: {
+    allowedClaims: ["citizenship"],
+    requiredClaims: ["citizenship"],
+    maxValidityDays: 3650,
+  },
+  IncomeCredential: {
+    allowedClaims: ["incomeMin", "incomeMax", "currency"],
+    requiredClaims: ["incomeMin", "incomeMax", "currency"],
+    maxValidityDays: 365,
+  },
+};
+function pickClaims(input: any, allowed: string[]) {
+  const out: Record<string, any> = {};
+  for (const k of allowed) {
+    if (input?.[k] !== undefined) out[k] = input[k];
+  }
+  return out;
+}
+
+function assertRequired(obj: Record<string, any>, required: string[]) {
+  for (const k of required) {
+    if (obj[k] === undefined || obj[k] === null || obj[k] === "") {
+      throw new Error(`missing_claim:${k}`);
+    }
+  }
+}
+
+function validateClaims(mainType: string, claims: Record<string, any>) {
+  if (mainType === "CitizenshipCredential") {
+    const c = String(claims.citizenship || "").toUpperCase();
+    if (!/^[A-Z]{2}$/.test(c)) throw new Error("bad_citizenship");
+    claims.citizenship = c;
+  }
+
+  if (mainType === "AgeCredential") {
+    const dob = String(claims.dateOfBirth || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) throw new Error("bad_dateOfBirth");
+  }
+
+  if (mainType === "IncomeCredential") {
+    const min = Number(claims.incomeMin);
+    const max = Number(claims.incomeMax);
+    const cur = String(claims.currency || "").toUpperCase();
+    if (!Number.isFinite(min) || !Number.isFinite(max))
+      throw new Error("bad_income_range");
+    if (min > max) throw new Error("income_min_gt_max");
+    if (!/^[A-Z]{3}$/.test(cur)) throw new Error("bad_currency");
+    claims.incomeMin = min;
+    claims.incomeMax = max;
+    claims.currency = cur;
+  }
+}
+
+function clampValidityDays(requested: any, maxDays: number) {
+  const d = Number(requested);
+  if (!Number.isFinite(d) || d <= 0) return maxDays;
+  return Math.min(Math.floor(d), maxDays);
+}
+
+function signHolderToken(payload: { sub: string; holderDid: string }) {
+  const secret = process.env.HOLDER_JWT_SECRET;
+  if (!secret) throw new Error("Missing HOLDER_JWT_SECRET");
+  return jwt.sign({ ...payload, typ: "holder" }, secret, { expiresIn: "24h" });
+}
+
+function requireHolder(req: any, res: any, next: any) {
+  const h = req.headers.authorization || req.headers.Authorization;
+  const m = /Bearer\s+(.+)/i.exec(String(h || ""));
+  const token = m?.[1];
+  if (!token)
+    return res.status(401).json({ ok: false, error: "missing_token" });
+
   try {
-    console.log("[issue] request received");
-    const tok = bearer(req);
-    if (!tok) return res.status(401).json({ error: "missing_token" });
+    const secret = process.env.HOLDER_JWT_SECRET!;
+    const payload = jwt.verify(token, secret) as any;
+    if (payload?.typ !== "holder" || !payload?.holderDid) {
+      return res.status(401).json({ ok: false, error: "invalid_token" });
+    }
+    (req as any).holder = payload;
+    return next();
+  } catch {
+    return res.status(401).json({ ok: false, error: "invalid_token" });
+  }
+}
 
-    const conn = [...CONNECTIONS.values()].find(
-      (c) => c.token === tok && c.exp > now(),
+app.post("/vc/request", requireHolder, async (req, res) => {
+  try {
+    const holderDid = String((req as any).holder?.holderDid || "").trim();
+    const subjectDid = holderDid;
+    const type = String(req.body?.type || "").trim();
+    const validityDaysIn = req.body?.validityDays;
+    const claimsIn = req.body?.claims;
+
+    if (!holderDid.startsWith("did:")) {
+      return res.status(401).json({ ok: false, error: "bad_holder" });
+    }
+
+    const policy = VC_POLICY[type];
+    if (!policy) {
+      return res.status(400).json({ ok: false, error: "type_not_allowed" });
+    }
+
+    if (!claimsIn || typeof claimsIn !== "object" || Array.isArray(claimsIn)) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "claims_must_be_object" });
+    }
+
+    const claims = pickClaims(claimsIn, policy.allowedClaims);
+    try {
+      assertRequired(claims, policy.requiredClaims);
+      validateClaims(type, claims);
+    } catch (e: any) {
+      return res
+        .status(400)
+        .json({ ok: false, error: String(e?.message || e) });
+    }
+
+    const validityDays = clampValidityDays(
+      validityDaysIn,
+      policy.maxValidityDays,
     );
-    if (!conn)
-      return res.status(401).json({ error: "invalid_or_expired_token" });
-
-    const { subjectDid, claims, type, validitySeconds } = req.body || {};
-    console.log(
-      `[issue] by holder=${conn.holderDid} subject=${subjectDid} types=${
-        Array.isArray(type) ? type.join(",") : type || "(none)"
-      }`,
-    );
-    if (!subjectDid || typeof claims !== "object")
-      return res.status(400).json({ error: "bad_request" });
-    if (subjectDid !== conn.holderDid)
-      return res.status(400).json({ error: "subject_mismatch" });
-
     const issuanceDate = new Date().toISOString();
-    const expSec = validitySeconds
-      ? Math.floor(Date.now() / 1000) + Number(validitySeconds)
-      : undefined;
+    const expirationDate = new Date(
+      Date.now() + validityDays * 86400_000,
+    ).toISOString();
 
-    const verifiableCredential = await agent.createVerifiableCredential({
+    const vc = await agent.createVerifiableCredential({
       credential: {
         issuer: { id: ISSUER_DID },
         issuanceDate,
-        expirationDate: expSec
-          ? new Date(expSec * 1000).toISOString()
-          : undefined,
-        type: [
-          "VerifiableCredential",
-          ...(Array.isArray(type) ? type : type ? [type] : []),
-        ],
+        expirationDate,
+        type: ["VerifiableCredential", type],
         credentialSubject: { id: subjectDid, ...claims },
       },
       proofFormat: "jwt",
     });
 
-    console.log("[issue] ✅ VC issued");
-    res.json({ ok: true, vc: verifiableCredential });
+    const vcHash = hashVcPayload(vc);
+
+    const vcJwt =
+      typeof vc === "string"
+        ? vc
+        : (vc as any)?.proof?.jwt
+        ? String((vc as any).proof.jwt)
+        : JSON.stringify(vc);
+
+    const d = await ds();
+    try {
+      await d.query(
+        `INSERT INTO public.vc_issuance_log
+         (admin_email, issuer_did, subject_did, vc_type, claims, issuance_date, expiration_date, vc_hash, vc_jwt)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          null,
+          ISSUER_DID,
+          subjectDid,
+          type,
+          JSON.stringify(claims),
+          issuanceDate,
+          expirationDate,
+          vcHash,
+          vcJwt,
+        ],
+      );
+    } finally {
+      await d.destroy();
+    }
+
+    return res.json({ ok: true, vcHash, vc });
   } catch (e: any) {
-    console.error(`[issue] ❌ ${String(e?.message ?? e)}`);
-    res.status(400).json({ error: String(e?.message ?? e) });
+    console.error("[/vc/request] error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "issue_failed", message: e?.message });
   }
 });
 
@@ -1671,46 +1802,51 @@ app.post("/admin/vc/issue", requireAdmin, async (req, res) => {
   try {
     const subjectDid = String(req.body?.subjectDid || "").trim();
     const typeIn = req.body?.type;
-    const claims = req.body?.claims;
-
-    const validitySeconds = req.body?.validitySeconds
-      ? Number(req.body.validitySeconds)
-      : undefined;
+    const claimsIn = req.body?.claims;
 
     if (!subjectDid.startsWith("did:")) {
       return res.status(400).json({ ok: false, error: "bad_subject_did" });
     }
-    if (!claims || typeof claims !== "object" || Array.isArray(claims)) {
+    if (!claimsIn || typeof claimsIn !== "object" || Array.isArray(claimsIn)) {
       return res
         .status(400)
         .json({ ok: false, error: "claims_must_be_object" });
     }
 
-    const typeArr = Array.isArray(typeIn)
-      ? typeIn
-      : typeIn
-      ? [typeIn]
-      : ["DemoCredential"];
-    const mainType =
-      typeArr.find((t: string) => t !== "VerifiableCredential") || typeArr[0];
+    const typeArr = Array.isArray(typeIn) ? typeIn : typeIn ? [typeIn] : [];
+    const mainType = String(typeArr[0] || "");
+    const policy = VC_POLICY[mainType];
+    if (!policy) {
+      return res.status(400).json({ ok: false, error: "unsupported_vc_type" });
+    }
+
+    let claims = pickClaims(claimsIn, policy.allowedClaims);
+    try {
+      assertRequired(claims, policy.requiredClaims);
+      validateClaims(mainType, claims);
+    } catch (e: any) {
+      return res
+        .status(400)
+        .json({ ok: false, error: String(e?.message || e) });
+    }
+
+    const validityDays = clampValidityDays(
+      req.body?.validityDays,
+      policy.maxValidityDays,
+    );
 
     const issuanceDate = new Date().toISOString();
-    const expSec =
-      validitySeconds && Number.isFinite(validitySeconds) && validitySeconds > 0
-        ? Math.floor(Date.now() / 1000) + validitySeconds
-        : undefined;
-
-    const expirationDate = expSec
-      ? new Date(expSec * 1000).toISOString()
-      : undefined;
+    const expirationDate = new Date(
+      Date.now() + validityDays * 86400_000,
+    ).toISOString();
 
     const vc = await agent.createVerifiableCredential({
       credential: {
         issuer: { id: ISSUER_DID },
         issuanceDate,
         expirationDate,
-        type: ["VerifiableCredential", ...typeArr.filter(Boolean)],
-        credentialSubject: { id: subjectDid, ...(claims || {}) },
+        type: ["VerifiableCredential", mainType],
+        credentialSubject: { id: subjectDid, ...claims },
       },
       proofFormat: "jwt",
     });
@@ -1718,6 +1854,13 @@ app.post("/admin/vc/issue", requireAdmin, async (req, res) => {
     const vcHash = hashVcPayload(vc);
 
     const adminEmail = (req as any).admin?.email || null;
+
+    const vcJwt =
+      typeof vc === "string"
+        ? vc
+        : (vc as any)?.proof?.jwt
+        ? String((vc as any).proof.jwt)
+        : JSON.stringify(vc);
 
     const d = await ds();
     try {
@@ -1734,7 +1877,7 @@ app.post("/admin/vc/issue", requireAdmin, async (req, res) => {
           issuanceDate,
           expirationDate || null,
           vcHash,
-          typeof vc === "string" ? vc : JSON.stringify(vc),
+          vcJwt,
         ],
       );
     } finally {
@@ -1779,6 +1922,29 @@ app.get("/admin/vc/issued", requireAdmin, async (req, res) => {
     }
   } catch (e: any) {
     return res.status(500).json({ ok: false, error: "list_failed" });
+  }
+});
+
+app.get("/admin/vc/issued/:id", requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id))
+    return res.status(400).json({ ok: false, error: "bad_id" });
+
+  const d = await ds();
+  try {
+    const rows = await d.query(
+      `SELECT id, created_at, admin_email, issuer_did, subject_did, vc_type, claims,
+              issuance_date, expiration_date, vc_hash, vc_jwt
+       FROM public.vc_issuance_log
+       WHERE id = $1
+       LIMIT 1`,
+      [id],
+    );
+    const row = rows?.[0];
+    if (!row) return res.status(404).json({ ok: false, error: "not_found" });
+    return res.json({ ok: true, item: row });
+  } finally {
+    await d.destroy();
   }
 });
 

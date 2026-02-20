@@ -28,9 +28,9 @@ type IssuedRow = {
 
 export default function Page() {
     const [subjectDid, setSubjectDid] = React.useState("");
-    const [vcType, setVcType] = React.useState("DemoCredential");
+    const [vcType, setVcType] = React.useState("CitizenshipCredential");
     const [claimsText, setClaimsText] = React.useState(`{"citizenship":"RO"}`);
-    const [validitySeconds, setValiditySeconds] = React.useState<string>("");
+    const [validityDays, setValidityDays] = React.useState<string>("");
 
     const [issuing, setIssuing] = React.useState(false);
     const [err, setErr] = React.useState("");
@@ -76,7 +76,7 @@ export default function Page() {
                 type: vcType,
                 claims: claimsObj,
             };
-            if (validitySeconds.trim()) body.validitySeconds = Number(validitySeconds.trim());
+            if (validityDays.trim()) body.validityDays = Number(validityDays.trim());
 
             const res = await api("/admin/vc/issue", {
                 method: "POST",
@@ -102,6 +102,9 @@ export default function Page() {
         a.click();
         URL.revokeObjectURL(a.href);
     };
+
+    const vcRaw =
+        typeof result?.vc === "string" ? result.vc : JSON.stringify(result.vc, null, 2);
 
     return (
         <Box>
@@ -134,12 +137,17 @@ export default function Page() {
                             />
 
                             <TextField
+                                select
                                 label="Credential type"
                                 value={vcType}
                                 onChange={(e) => setVcType(e.target.value)}
-                                placeholder="CitizenshipCredential / IncomeCredential"
+                                slotProps={{ select: { native: true } }}
                                 fullWidth
-                            />
+                            >
+                                <option value="CitizenshipCredential">CitizenshipCredential</option>
+                                <option value="AgeCredential">AgeCredential</option>
+                                <option value="IncomeCredential">IncomeCredential</option>
+                            </TextField>
 
                             <TextField
                                 label="Claims (JSON object)"
@@ -153,8 +161,8 @@ export default function Page() {
 
                             <TextField
                                 label="Validity seconds (optional)"
-                                value={validitySeconds}
-                                onChange={(e) => setValiditySeconds(e.target.value.replace(/[^\d]/g, ""))}
+                                value={validityDays}
+                                onChange={(e) => setValidityDays(e.target.value.replace(/[^\d]/g, ""))}
                                 placeholder="2592000 (30 days)"
                                 fullWidth
                             />
@@ -177,9 +185,7 @@ export default function Page() {
                                 </Typography>
 
                                 <Stack direction="row" spacing={1} flexWrap="wrap">
-                                    <Button variant="outlined" onClick={() => copy(String(result.vc))}>
-                                        Copy VC
-                                    </Button>
+                                    <Button variant="outlined" onClick={() => copy(vcRaw)}>Copy VC</Button>
                                     <Button
                                         variant="outlined"
                                         onClick={() => downloadJson(result, `issued_vc_${result.vcHash}.json`)}
