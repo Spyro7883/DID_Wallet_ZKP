@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
     SafeAreaView,
     View,
@@ -19,18 +19,35 @@ const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 type ClaimRow = { id: string; key: string; value: string };
 
+type VCType = "AgeCredential" | "CitizenshipCredential" | "IncomeCredential";
+
+type VcRequestStatus =
+    | "pending"
+    | "approved"
+    | "rejected"
+    | "unknown";
+
+type VcRequestDetail = {
+    id: number;
+    status: VcRequestStatus;
+    holderDid: string;
+    subjectDid: string;
+    vcType: string;
+    claims: any;
+    validityDays: number | null;
+    createdAt: string;
+    decidedAt: string | null;
+    decidedBy: string | null;
+    decisionNote: string | null;
+    issued: null | { vcHash: string; vcJwt: string | null };
+};
+
 const rid = () => Math.random().toString(16).slice(2) + Date.now().toString(16);
 
 function parseValue(v: string): any {
     const s = v.trim();
-
-    // bool
     if (/^(true|false)$/i.test(s)) return s.toLowerCase() === "true";
-
-    // number (int/float)
     if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
-
-    // string
     return v;
 }
 
@@ -53,11 +70,36 @@ function buildClaims(rows: ClaimRow[]): { claims: Record<string, any>; error?: s
     return { claims: out };
 }
 
+function validateClaimsForType(t: VCType, claims: Record<string, any>) {
+    if (t === "CitizenshipCredential") {
+        const c = String(claims.citizenship || "").toUpperCase();
+        if (!/^[A-Z]{2}$/.test(c)) throw new Error("citizenship must be 2 letters (e.g. RO)");
+        claims.citizenship = c;
+    }
+
+    if (t === "AgeCredential") {
+        const dob = String(claims.dateOfBirth || "");
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) throw new Error("dateOfBirth must be YYYY-MM-DD");
+    }
+
+    if (t === "IncomeCredential") {
+        const min = Number(claims.incomeMin);
+        const max = Number(claims.incomeMax);
+        const cur = String(claims.currency || "").toUpperCase();
+        if (!Number.isFinite(min) || !Number.isFinite(max)) throw new Error("incomeMin/incomeMax must be numbers");
+        if (min > max) throw new Error("incomeMin must be <= incomeMax");
+        if (!/^[A-Z]{3}$/.test(cur)) throw new Error("currency must be 3 letters (e.g. RON)");
+        claims.incomeMin = min;
+        claims.incomeMax = max;
+        claims.currency = cur;
+    }
+}
+
 export default function CreateCredentialScreen() {
     const navigation = useNavigation<any>();
 
     const [subjectDid, setSubjectDid] = useState("");
-    const [type, setType] = useState("EmploymentCredential");
+    const [type, setType] = useState<VCType>("CitizenshipCredential");
     const [validDays, setValidDays] = useState("365");
 
     const [claimRows, setClaimRows] = useState<ClaimRow[]>([
@@ -67,10 +109,37 @@ export default function CreateCredentialScreen() {
     const [loading, setLoading] = useState(false);
     const canCreate = useMemo(() => !loading, [loading]);
 
+    // request flow state
+    const [requestId, setRequestId] = useState<number | null>(null);
+    const [requestDetail, setRequestDetail] = useState<VcRequestDetail | null>(null);
+    const [loadingStatus, setLoadingStatus] = useState(false);
+
+    const pollRef = useRef<any>(null);
+
+    const DEFAULT_FIELDS: Record<VCType, { key: string; value: string }[]> = {
+        CitizenshipCredential: [{ key: "citizenship", value: "RO" }],
+        AgeCredential: [{ key: "dateOfBirth", value: "1999-01-01" }],
+        IncomeCredential: [
+            { key: "incomeMin", value: "1000" },
+            { key: "incomeMax", value: "3000" },
+            { key: "currency", value: "RON" },
+        ],
+    };
+
+    const TYPES: { label: string; value: VCType }[] = [
+        { label: "Citizenship", value: "CitizenshipCredential" },
+        { label: "Age", value: "AgeCredential" },
+        { label: "Income", value: "IncomeCredential" },
+    ];
+
+    useEffect(() => {
+        setClaimRows(DEFAULT_FIELDS[type].map((f) => ({ id: rid(), ...f })));
+    }, [type]);
+
     useEffect(() => {
         (async () => {
             const sess = await loadLastWallet();
-            if (!sess?.profileName || !sess?.passphrase) return;
+            if (!sess?.profileName || !sess?.passphrase || !BASE_URL) return;
 
             try {
                 const resp = await fetch(`${BASE_URL}/wallets/summary`, {
@@ -85,13 +154,80 @@ export default function CreateCredentialScreen() {
     }, []);
 
     const addRow = () => setClaimRows((p) => [...p, { id: rid(), key: "", value: "" }]);
-
     const removeRow = (id: string) => setClaimRows((p) => p.filter((x) => x.id !== id));
-
     const updateRow = (id: string, patch: Partial<ClaimRow>) =>
         setClaimRows((p) => p.map((x) => (x.id === id ? { ...x, ...patch } : x)));
 
-    const createVc = async () => {
+    async function fetchRequestStatus(id: number) {
+        const sess = await loadLastWallet();
+        if (!sess?.holderToken) throw new Error("Missing holder token. Pair first.");
+        if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+
+        setLoadingStatus(true);
+        try {
+            const resp = await fetch(`${BASE_URL}/vc/requests/${id}`, {
+                method: "GET",
+                headers: {
+                    Authorization: `Bearer ${sess.holderToken}`,
+                },
+            });
+            const json = await resp.json();
+            if (!resp.ok || !json.ok) throw new Error(json.error || json.message || "status_failed");
+
+            const r = json.request as any;
+
+            const detail: VcRequestDetail = {
+                id: Number(r.id),
+                status: (String(r.status || "unknown") as VcRequestStatus) || "unknown",
+                holderDid: String(r.holderDid || ""),
+                subjectDid: String(r.subjectDid || ""),
+                vcType: String(r.vcType || ""),
+                claims: r.claims ?? {},
+                validityDays: r.validityDays ?? null,
+                createdAt: String(r.createdAt || ""),
+                decidedAt: r.decidedAt ? String(r.decidedAt) : null,
+                decidedBy: r.decidedBy ? String(r.decidedBy) : null,
+                decisionNote: r.decisionNote ? String(r.decisionNote) : null,
+                issued: r.issued
+                    ? {
+                        vcHash: String(r.issued.vcHash || ""),
+                        vcJwt: r.issued.vcJwt ? String(r.issued.vcJwt) : null,
+                    }
+                    : null,
+            };
+
+            setRequestDetail(detail);
+
+            if (detail.status !== "pending") {
+                if (pollRef.current) {
+                    clearInterval(pollRef.current);
+                    pollRef.current = null;
+                }
+            }
+        } finally {
+            setLoadingStatus(false);
+        }
+    }
+
+    useEffect(() => {
+        if (!requestId) return;
+
+        fetchRequestStatus(requestId).catch(() => { });
+
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = setInterval(() => {
+            fetchRequestStatus(requestId).catch(() => { });
+        }, 4000);
+
+        return () => {
+            if (pollRef.current) {
+                clearInterval(pollRef.current);
+                pollRef.current = null;
+            }
+        };
+    }, [requestId]);
+
+    const submitRequest = async () => {
         try {
             setLoading(true);
 
@@ -100,44 +236,65 @@ export default function CreateCredentialScreen() {
                 navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
                 return;
             }
+            if (!sess?.holderToken) {
+                throw new Error("Not connected to issuer. Pair first to obtain holder token.");
+            }
+            if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
 
             const { claims, error } = buildClaims(claimRows);
             if (error) throw new Error(error);
+            validateClaimsForType(type, claims);
 
             const days = Number(validDays || "0");
-            const validitySeconds = days > 0 ? Math.floor(days * 24 * 3600) : undefined;
+            if (!Number.isFinite(days) || days <= 0) throw new Error("validityDays must be > 0");
 
-            const resp = await fetch(`${BASE_URL}/wallets/vcs/issue-demo`, {
+            const resp = await fetch(`${BASE_URL}/vc/requests`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${sess.holderToken}`,
+                },
                 body: JSON.stringify({
-                    profile: sess.profileName,
-                    passphrase: sess.passphrase,
-                    subjectDid: subjectDid.trim(),
+                    type,
+                    validityDays: days,
                     claims,
-                    type: type.trim(),
-                    validitySeconds,
                 }),
             });
 
             const json = await resp.json();
-            if (!resp.ok || !json.ok) throw new Error(json.error || json.message || "create_vc_failed");
+            if (!resp.ok || !json.ok) throw new Error(json.error || json.message || "request_failed");
 
-            Alert.alert("VC created", `Saved hash: ${json.hash ?? "-"}`);
-            navigation.goBack();
+            const id = Number(json.request?.id);
+            if (!Number.isFinite(id)) throw new Error("bad_request_id");
+
+            setRequestId(id);
+            setRequestDetail(null);
+
+            Alert.alert("Request submitted", `Request #${id} is pending approval`);
         } catch (e: any) {
-            Alert.alert("Error", e?.message || "Could not create VC");
+            Alert.alert("Error", e?.message || "Could not submit request");
         } finally {
             setLoading(false);
         }
     };
 
+    const statusLabel =
+        requestDetail?.status === "approved"
+            ? "Approved"
+            : requestDetail?.status === "rejected"
+                ? "Rejected"
+                : requestDetail?.status === "pending"
+                    ? "Pending"
+                    : requestId
+                        ? "Pending"
+                        : "—";
+
     return (
         <SafeAreaView style={styles.container}>
             <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
-                <Text style={styles.title}>Create VC</Text>
+                <Text style={styles.title}>Request VC</Text>
 
-                <Text style={styles.label}>Subject DID</Text>
+                <Text style={styles.label}>Your DID (subject = holder)</Text>
                 <TextInput
                     value={subjectDid}
                     onChangeText={setSubjectDid}
@@ -145,16 +302,23 @@ export default function CreateCredentialScreen() {
                     placeholderTextColor="#6B7280"
                     style={styles.input}
                     autoCapitalize="none"
+                    editable={false}
                 />
 
                 <Text style={styles.label}>Credential type</Text>
-                <TextInput
-                    value={type}
-                    onChangeText={setType}
-                    placeholder="EmploymentCredential"
-                    placeholderTextColor="#6B7280"
-                    style={styles.input}
-                />
+                <View style={{ flexDirection: "row", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                    {TYPES.map((t) => (
+                        <Pressable
+                            key={t.value}
+                            onPress={() => setType(t.value)}
+                            style={[styles.typePill, type === t.value && styles.typePillActive]}
+                        >
+                            <Text style={[styles.typeText, type === t.value && styles.typeTextActive]}>
+                                {t.label}
+                            </Text>
+                        </Pressable>
+                    ))}
+                </View>
 
                 <Text style={styles.label}>Validity (days)</Text>
                 <TextInput
@@ -205,16 +369,62 @@ export default function CreateCredentialScreen() {
                     </View>
                 ))}
 
-
-                <View style={{ height: 16 }} />
+                <View style={{ height: 8 }} />
 
                 <Pressable
                     disabled={!canCreate}
-                    onPress={createVc}
+                    onPress={submitRequest}
                     style={[styles.primaryBtn, !canCreate && { opacity: 0.6 }]}
                 >
-                    {loading ? <ActivityIndicator /> : <Text style={styles.primaryText}>Create VC</Text>}
+                    {loading ? <ActivityIndicator /> : <Text style={styles.primaryText}>Submit request</Text>}
                 </Pressable>
+
+                {requestId ? (
+                    <View style={styles.statusCard}>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.statusTitle}>Request #{requestId}</Text>
+                                <Text style={styles.statusSub}>
+                                    Status: <Text style={{ fontWeight: "800" }}>{statusLabel}</Text>
+                                </Text>
+                            </View>
+
+                            <Pressable
+                                onPress={() => fetchRequestStatus(requestId).catch((e) => Alert.alert("Error", e?.message || "status_failed"))}
+                                style={styles.refreshBtn}
+                            >
+                                {loadingStatus ? (
+                                    <ActivityIndicator />
+                                ) : (
+                                    <>
+                                        <MaterialIcons name="refresh" size={18} color="#111827" />
+                                        <Text style={styles.refreshText}>Refresh</Text>
+                                    </>
+                                )}
+                            </Pressable>
+                        </View>
+
+                        {requestDetail?.decisionNote ? (
+                            <Text style={styles.statusNote}>Note: {requestDetail.decisionNote}</Text>
+                        ) : null}
+
+                        {requestDetail?.issued?.vcHash ? (
+                            <View style={{ marginTop: 10 }}>
+                                <Text style={styles.statusSub}>Issued VC hash:</Text>
+                                <Text style={styles.mono}>{requestDetail.issued.vcHash}</Text>
+
+                                {requestDetail.issued.vcJwt ? (
+                                    <>
+                                        <Text style={[styles.statusSub, { marginTop: 8 }]}>VC JWT:</Text>
+                                        <Text style={styles.monoSmall} numberOfLines={6}>
+                                            {requestDetail.issued.vcJwt}
+                                        </Text>
+                                    </>
+                                ) : null}
+                            </View>
+                        ) : null}
+                    </View>
+                ) : null}
 
                 <Pressable onPress={() => navigation.goBack()} style={styles.secondaryBtn}>
                     <Text style={styles.secondaryText}>Back</Text>
@@ -243,6 +453,21 @@ const styles = StyleSheet.create({
         fontSize: 14,
         ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
     },
+
+    typePill: {
+        borderWidth: 1,
+        borderColor: "rgba(229,231,235,0.2)",
+        backgroundColor: "rgba(255,255,255,0.04)",
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderRadius: 999,
+    },
+    typePillActive: {
+        backgroundColor: ACCENT_BG,
+        borderColor: "#D8B4FE",
+    },
+    typeText: { color: "white", fontWeight: "600", fontSize: 12 },
+    typeTextActive: { color: "#111827" },
 
     claimsHeader: {
         marginTop: 12,
@@ -328,6 +553,39 @@ const styles = StyleSheet.create({
         borderColor: "#D8B4FE",
     },
     primaryText: { fontSize: 14, fontWeight: "700", color: "#111827" },
+
+    statusCard: {
+        marginTop: 14,
+        borderWidth: 1,
+        borderColor: "rgba(229,231,235,0.15)",
+        borderRadius: 14,
+        padding: 12,
+        backgroundColor: "rgba(255,255,255,0.04)",
+    },
+    statusTitle: { color: "white", fontWeight: "800", fontSize: 14 },
+    statusSub: { color: "#C7CDD6", marginTop: 4, fontSize: 12 },
+    statusNote: { color: "#C7CDD6", marginTop: 8, fontSize: 12 },
+
+    refreshBtn: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        backgroundColor: ACCENT_BG,
+        borderRadius: 999,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderWidth: 1,
+        borderColor: "#D8B4FE",
+    },
+    refreshText: { color: "#111827", fontWeight: "800", fontSize: 12 },
+
+    mono: { color: "white", marginTop: 4, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
+    monoSmall: {
+        color: "white",
+        marginTop: 4,
+        fontSize: 12,
+        fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    },
 
     secondaryBtn: {
         marginTop: 10,

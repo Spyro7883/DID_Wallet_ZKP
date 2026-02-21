@@ -383,6 +383,7 @@ async function schemaIsEmpty(schema: string): Promise<boolean> {
   await ensureAdminUsersTable();
   await ensureAdminSettingsTable();
   await ensureVcIssuanceLogTable();
+  await ensureVcRequestsTable();
 
   agent = await setupAgent(
     "issuer",
@@ -749,27 +750,32 @@ function requireHolder(req: any, res: any, next: any) {
   }
 }
 
-app.post("/vc/request", requireHolder, async (req, res) => {
+app.post("/vc/requests", requireHolder, async (req, res) => {
   try {
     const holderDid = String((req as any).holder?.holderDid || "").trim();
-    const subjectDid = holderDid;
-    const type = String(req.body?.type || "").trim();
-    const validityDaysIn = req.body?.validityDays;
-    const claimsIn = req.body?.claims;
-
     if (!holderDid.startsWith("did:")) {
       return res.status(401).json({ ok: false, error: "bad_holder" });
     }
 
+    const type = String(req.body?.type || "").trim();
     const policy = VC_POLICY[type];
     if (!policy) {
       return res.status(400).json({ ok: false, error: "type_not_allowed" });
     }
 
+    const claimsIn = req.body?.claims;
     if (!claimsIn || typeof claimsIn !== "object" || Array.isArray(claimsIn)) {
       return res
         .status(400)
         .json({ ok: false, error: "claims_must_be_object" });
+    }
+
+    // subjectDid: by default holderDid; keep self-issuance safe
+    const subjectDid = String(req.body?.subjectDid || holderDid).trim();
+    if (subjectDid !== holderDid) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "subject_must_equal_holder" });
     }
 
     const claims = pickClaims(claimsIn, policy.allowedClaims);
@@ -783,13 +789,190 @@ app.post("/vc/request", requireHolder, async (req, res) => {
     }
 
     const validityDays = clampValidityDays(
-      validityDaysIn,
+      req.body?.validityDays,
       policy.maxValidityDays,
     );
+
+    const d = await ds();
+    try {
+      const rows = await d.query(
+        `INSERT INTO public.vc_requests
+         (status, holder_did, subject_did, vc_type, claims, validity_days)
+         VALUES ('pending', $1, $2, $3, $4::jsonb, $5)
+         RETURNING id, status, created_at`,
+        [holderDid, subjectDid, type, JSON.stringify(claims), validityDays],
+      );
+
+      const r = rows?.[0];
+      return res.json({
+        ok: true,
+        request: {
+          id: Number(r.id),
+          status: String(r.status),
+          createdAt: String(r.created_at),
+        },
+      });
+    } finally {
+      await d.destroy();
+    }
+  } catch (e: any) {
+    console.error("[/vc/requests] error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "request_failed", message: e?.message });
+  }
+});
+
+app.get("/vc/requests/:id", requireHolder, async (req, res) => {
+  const holderDid = String((req as any).holder?.holderDid || "").trim();
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ ok: false, error: "bad_id" });
+  }
+
+  const d = await ds();
+  try {
+    const rows = await d.query(
+      `SELECT id, status, holder_did, subject_did, vc_type, claims,
+              validity_days, created_at, decided_at, decided_by, decision_note,
+              issued_vc_hash, issued_vc_jwt
+       FROM public.vc_requests
+       WHERE id = $1
+       LIMIT 1`,
+      [id],
+    );
+    const row = rows?.[0];
+    if (!row) return res.status(404).json({ ok: false, error: "not_found" });
+
+    if (String(row.holder_did) !== holderDid) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
+    return res.json({
+      ok: true,
+      request: {
+        id: Number(row.id),
+        status: String(row.status),
+        holderDid: String(row.holder_did),
+        subjectDid: String(row.subject_did),
+        vcType: String(row.vc_type),
+        claims: row.claims ?? {},
+        validityDays: row.validity_days ?? null,
+        createdAt: String(row.created_at),
+        decidedAt: row.decided_at ? String(row.decided_at) : null,
+        decidedBy: row.decided_by ? String(row.decided_by) : null,
+        decisionNote: row.decision_note ? String(row.decision_note) : null,
+        issued: row.issued_vc_hash
+          ? {
+              vcHash: String(row.issued_vc_hash),
+              vcJwt: row.issued_vc_jwt ? String(row.issued_vc_jwt) : null,
+            }
+          : null,
+      },
+    });
+  } finally {
+    await d.destroy();
+  }
+});
+
+app.get("/admin/vc/requests", requireAdmin, async (req, res) => {
+  const status = String(req.query?.status || "pending").toLowerCase();
+  const allowed = new Set(["pending", "approved", "rejected", "all"]);
+  const st = allowed.has(status) ? status : "pending";
+
+  const limit = Math.min(100, Math.max(1, Number(req.query?.limit || 20)));
+  const offset = Math.max(0, Number(req.query?.offset || 0));
+
+  const d = await ds();
+  try {
+    const where = st === "all" ? "" : "WHERE status = $1";
+    const params: any[] = st === "all" ? [] : [st];
+
+    // pagination params
+    params.push(limit, offset);
+
+    const rows = await d.query(
+      `
+      SELECT id, status, holder_did, subject_did, vc_type, created_at,
+             decided_at, decided_by, issued_vc_hash
+      FROM public.vc_requests
+      ${where}
+      ORDER BY created_at DESC
+      LIMIT $${params.length - 1} OFFSET $${params.length}
+      `,
+      params,
+    );
+
+    return res.json({ ok: true, items: rows || [] });
+  } finally {
+    await d.destroy();
+  }
+});
+
+app.post("/admin/vc/requests/:id/approve", requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ ok: false, error: "bad_id" });
+  }
+
+  const adminEmail = String((req as any).admin?.email || "");
+
+  const d = await ds();
+  const qr = d.createQueryRunner();
+  await qr.connect();
+  await qr.startTransaction();
+
+  try {
+    // lock row
+    const rows = await qr.query(
+      `SELECT id, status, holder_did, subject_did, vc_type, claims, validity_days
+       FROM public.vc_requests
+       WHERE id = $1
+       FOR UPDATE`,
+      [id],
+    );
+    const r = rows?.[0];
+    if (!r) {
+      await qr.rollbackTransaction();
+      return res.status(404).json({ ok: false, error: "not_found" });
+    }
+    if (String(r.status) !== "pending") {
+      await qr.rollbackTransaction();
+      return res
+        .status(409)
+        .json({ ok: false, error: "not_pending", status: String(r.status) });
+    }
+
+    const type = String(r.vc_type);
+    const policy = VC_POLICY[type];
+    if (!policy) {
+      await qr.rollbackTransaction();
+      return res.status(400).json({ ok: false, error: "type_not_allowed" });
+    }
+
+    // claims in DB are already filtered, but re-validate
+    const claims = r.claims && typeof r.claims === "object" ? r.claims : {};
+    try {
+      assertRequired(claims, policy.requiredClaims);
+      validateClaims(type, claims);
+    } catch (e: any) {
+      await qr.rollbackTransaction();
+      return res
+        .status(400)
+        .json({ ok: false, error: String(e?.message || e) });
+    }
+
+    const validityDays = clampValidityDays(
+      r.validity_days ?? policy.maxValidityDays,
+      policy.maxValidityDays,
+    );
+
     const issuanceDate = new Date().toISOString();
     const expirationDate = new Date(
       Date.now() + validityDays * 86400_000,
     ).toISOString();
+
+    const subjectDid = String(r.subject_did);
 
     const vc = await agent.createVerifiableCredential({
       credential: {
@@ -811,34 +994,81 @@ app.post("/vc/request", requireHolder, async (req, res) => {
         ? String((vc as any).proof.jwt)
         : JSON.stringify(vc);
 
-    const d = await ds();
-    try {
-      await d.query(
-        `INSERT INTO public.vc_issuance_log
-         (admin_email, issuer_did, subject_did, vc_type, claims, issuance_date, expiration_date, vc_hash, vc_jwt)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [
-          null,
-          ISSUER_DID,
-          subjectDid,
-          type,
-          JSON.stringify(claims),
-          issuanceDate,
-          expirationDate,
-          vcHash,
-          vcJwt,
-        ],
-      );
-    } finally {
-      await d.destroy();
-    }
+    await qr.query(
+      `UPDATE public.vc_requests
+       SET status = 'approved',
+           decided_at = now(),
+           decided_by = $2,
+           decision_note = $3,
+           issued_vc_hash = $4,
+           issued_vc_jwt = $5
+       WHERE id = $1`,
+      [
+        id,
+        adminEmail || null,
+        String(req.body?.note || "").slice(0, 500) || null,
+        vcHash,
+        vcJwt,
+      ],
+    );
 
-    return res.json({ ok: true, vcHash, vc });
+    await qr.query(
+      `INSERT INTO public.vc_issuance_log
+       (admin_email, issuer_did, subject_did, vc_type, claims, issuance_date, expiration_date, vc_hash, vc_jwt)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [
+        adminEmail || null,
+        ISSUER_DID,
+        subjectDid,
+        type,
+        JSON.stringify(claims),
+        issuanceDate,
+        expirationDate,
+        vcHash,
+        vcJwt,
+      ],
+    );
+
+    await qr.commitTransaction();
+
+    return res.json({
+      ok: true,
+      requestId: id,
+      vcHash,
+      vc,
+    });
   } catch (e: any) {
-    console.error("[/vc/request] error:", e?.message || e);
+    await qr.rollbackTransaction();
+    console.error("[/admin/vc/requests/:id/approve] error:", e?.message || e);
     return res
       .status(500)
-      .json({ ok: false, error: "issue_failed", message: e?.message });
+      .json({ ok: false, error: "approve_failed", message: e?.message });
+  } finally {
+    await qr.release();
+    await d.destroy();
+  }
+});
+
+app.get("/admin/vc/requests/:id", requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id))
+    return res.status(400).json({ ok: false, error: "bad_id" });
+
+  const d = await ds();
+  try {
+    const rows = await d.query(
+      `SELECT id, status, holder_did, subject_did, vc_type, claims, validity_days,
+              created_at, decided_at, decided_by, decision_note, issued_vc_hash
+       FROM public.vc_requests
+       WHERE id = $1
+       LIMIT 1`,
+      [id],
+    );
+    const row = rows?.[0];
+    if (!row) return res.status(404).json({ ok: false, error: "not_found" });
+    return res.json({ ok: true, request: row });
+  } finally {
+    await d.destroy();
   }
 });
 
@@ -1642,6 +1872,35 @@ async function ensureVcIssuanceLogTable() {
       );
       CREATE INDEX IF NOT EXISTS vc_issuance_log_subject_idx ON public.vc_issuance_log(subject_did);
       CREATE INDEX IF NOT EXISTS vc_issuance_log_created_idx ON public.vc_issuance_log(created_at DESC);
+    `);
+  } finally {
+    await d.destroy();
+  }
+}
+
+async function ensureVcRequestsTable() {
+  const d = await ds();
+  try {
+    await d.query(`
+      CREATE TABLE IF NOT EXISTS public.vc_requests (
+        id BIGSERIAL PRIMARY KEY,
+        status TEXT NOT NULL DEFAULT 'pending', -- pending | approved | rejected
+        holder_did TEXT NOT NULL,
+        subject_did TEXT NOT NULL,
+        vc_type TEXT NOT NULL,
+        claims JSONB NOT NULL DEFAULT '{}'::jsonb,
+        validity_days INT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        decided_at TIMESTAMPTZ,
+        decided_by TEXT,
+        decision_note TEXT,
+        issued_vc_hash TEXT,
+        issued_vc_jwt TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS vc_requests_status_idx ON public.vc_requests(status);
+      CREATE INDEX IF NOT EXISTS vc_requests_holder_idx ON public.vc_requests(holder_did);
+      CREATE INDEX IF NOT EXISTS vc_requests_created_idx ON public.vc_requests(created_at DESC);
     `);
   } finally {
     await d.destroy();
