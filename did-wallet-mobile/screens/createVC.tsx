@@ -44,6 +44,25 @@ type VcRequestDetail = {
 
 const rid = () => Math.random().toString(16).slice(2) + Date.now().toString(16);
 
+const notify = (title: string, message: string) => {
+    console.log(`[${title}] ${message}`);
+    if (Platform.OS === "web") {
+        // @ts-ignore
+        window.alert(`${title}\n\n${message}`);
+    } else {
+        Alert.alert(title, message);
+    }
+};
+
+async function readJsonSafe(resp: Response) {
+    const text = await resp.text();
+    try {
+        return { json: JSON.parse(text), text };
+    } catch {
+        return { json: null, text };
+    }
+}
+
 function parseValue(v: string): any {
     const s = v.trim();
     if (/^(true|false)$/i.test(s)) return s.toLowerCase() === "true";
@@ -228,18 +247,21 @@ export default function CreateCredentialScreen() {
     }, [requestId]);
 
     const submitRequest = async () => {
+        console.log("submitRequest: start", { BASE_URL });
         try {
             setLoading(true);
 
             const sess = await loadLastWallet();
+            console.log("submitRequest: session", sess);
             if (!sess?.profileName || !sess?.passphrase) {
+                notify("Auth", "No wallet session. Redirecting to Welcome.");
                 navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
                 return;
             }
-            if (!sess?.holderToken) {
-                throw new Error("Not connected to issuer. Pair first to obtain holder token.");
-            }
             if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+
+            const holderToken = (sess as any)?.holderToken;
+            if (!holderToken) throw new Error("Missing holderToken. Pair first (/connect/*).");
 
             const { claims, error } = buildClaims(claimRows);
             if (error) throw new Error(error);
@@ -248,21 +270,30 @@ export default function CreateCredentialScreen() {
             const days = Number(validDays || "0");
             if (!Number.isFinite(days) || days <= 0) throw new Error("validityDays must be > 0");
 
+            const body = { type, validityDays: days, claims };
+            console.log("submitRequest: POST /vc/requests body", body);
+
             const resp = await fetch(`${BASE_URL}/vc/requests`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${sess.holderToken}`,
+                    Authorization: `Bearer ${holderToken}`,
                 },
-                body: JSON.stringify({
-                    type,
-                    validityDays: days,
-                    claims,
-                }),
+                body: JSON.stringify(body),
             });
 
-            const json = await resp.json();
-            if (!resp.ok || !json.ok) throw new Error(json.error || json.message || "request_failed");
+            const { json, text } = await readJsonSafe(resp);
+            console.log("submitRequest: response", { status: resp.status, ok: resp.ok, json, text });
+
+            if (!resp.ok) {
+                const msg =
+                    (json && (json.error || json.message)) ||
+                    text ||
+                    `HTTP ${resp.status}`;
+                throw new Error(msg);
+            }
+
+            if (!json?.ok) throw new Error(json?.error || json?.message || "request_failed");
 
             const id = Number(json.request?.id);
             if (!Number.isFinite(id)) throw new Error("bad_request_id");
@@ -270,9 +301,10 @@ export default function CreateCredentialScreen() {
             setRequestId(id);
             setRequestDetail(null);
 
-            Alert.alert("Request submitted", `Request #${id} is pending approval`);
+            notify("Request submitted", `Request #${id} is pending approval`);
         } catch (e: any) {
-            Alert.alert("Error", e?.message || "Could not submit request");
+            console.error("submitRequest: error", e);
+            notify("Error", e?.message || "Could not submit request");
         } finally {
             setLoading(false);
         }
@@ -291,7 +323,11 @@ export default function CreateCredentialScreen() {
 
     return (
         <SafeAreaView style={styles.container}>
-            <ScrollView contentContainerStyle={{ paddingBottom: 24 }}>
+            <ScrollView
+                contentContainerStyle={{ paddingBottom: 24 }}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
+            >
                 <Text style={styles.title}>Request VC</Text>
 
                 <Text style={styles.label}>Your DID (subject = holder)</Text>
@@ -373,7 +409,8 @@ export default function CreateCredentialScreen() {
 
                 <Pressable
                     disabled={!canCreate}
-                    onPress={submitRequest}
+                    onPressIn={() => console.log("PRESS IN")}
+                    onPress={() => { console.log("PRESS"); submitRequest(); }}
                     style={[styles.primaryBtn, !canCreate && { opacity: 0.6 }]}
                 >
                     {loading ? <ActivityIndicator /> : <Text style={styles.primaryText}>Submit request</Text>}

@@ -3,9 +3,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 
 const LAST_PROFILE_KEY = "didwallet_last_profile";
-const HOLDER_TOKEN_KEY = "didwallet_holder_token";
-const HOLDER_DID_KEY = "didwallet_holder_did";
-const ISSUER_DID_KEY = "didwallet_issuer_did";
+
+const HOLDER_TOKEN_KEY = (profile: string) =>
+  `didwallet_holder_token_${safeKey(profile)}`;
+const HOLDER_DID_KEY = (profile: string) =>
+  `didwallet_holder_did_${safeKey(profile)}`;
+const ISSUER_DID_KEY = (profile: string) =>
+  `didwallet_issuer_did_${safeKey(profile)}`;
 
 function safeKey(s: string) {
   const out = (s || "")
@@ -56,22 +60,28 @@ export async function saveLastWallet(profileName: string, passphrase: string) {
   await setSecret(PASS_KEY(p), passphrase);
 }
 
-export async function saveHolderSession(input: {
-  holderToken: string;
-  holderDid?: string;
-  issuerDid?: string;
-}) {
-  await AsyncStorage.setItem(HOLDER_TOKEN_KEY, input.holderToken);
+export async function saveHolderSession(
+  profileName: string,
+  input: {
+    holderToken: string;
+    holderDid?: string;
+    issuerDid?: string;
+  },
+) {
+  const p = safeKey(profileName);
+  await setSecret(HOLDER_TOKEN_KEY(p), input.holderToken);
+
   if (input.holderDid)
-    await AsyncStorage.setItem(HOLDER_DID_KEY, input.holderDid);
+    await AsyncStorage.setItem(HOLDER_DID_KEY(p), input.holderDid);
   if (input.issuerDid)
-    await AsyncStorage.setItem(ISSUER_DID_KEY, input.issuerDid);
+    await AsyncStorage.setItem(ISSUER_DID_KEY(p), input.issuerDid);
 }
 
-export async function clearHolderSession() {
-  await AsyncStorage.removeItem(HOLDER_TOKEN_KEY);
-  await AsyncStorage.removeItem(HOLDER_DID_KEY);
-  await AsyncStorage.removeItem(ISSUER_DID_KEY);
+export async function clearHolderSession(profileName: string) {
+  const p = safeKey(profileName);
+  await deleteSecret(HOLDER_TOKEN_KEY(p));
+  await AsyncStorage.removeItem(HOLDER_DID_KEY(p));
+  await AsyncStorage.removeItem(ISSUER_DID_KEY(p));
 }
 
 export async function loadLastWallet(): Promise<WalletSession | null> {
@@ -82,17 +92,20 @@ export async function loadLastWallet(): Promise<WalletSession | null> {
   if (!passphrase) return null;
 
   const holderToken =
-    (await AsyncStorage.getItem(HOLDER_TOKEN_KEY)) || undefined;
-  const holderDid = (await AsyncStorage.getItem(HOLDER_DID_KEY)) || undefined;
-  const issuerDid = (await AsyncStorage.getItem(ISSUER_DID_KEY)) || undefined;
+    (await getSecret(HOLDER_TOKEN_KEY(profileName))) || undefined;
+  const holderDid =
+    (await AsyncStorage.getItem(HOLDER_DID_KEY(profileName))) || undefined;
+  const issuerDid =
+    (await AsyncStorage.getItem(ISSUER_DID_KEY(profileName))) || undefined;
 
   return { profileName, passphrase, holderToken, holderDid, issuerDid };
 }
 
 export async function clearLastWallet() {
   const profileName = await AsyncStorage.getItem(LAST_PROFILE_KEY);
-  if (profileName) await deleteSecret(PASS_KEY(profileName));
+  if (profileName) {
+    await deleteSecret(PASS_KEY(profileName));
+    await clearHolderSession(profileName);
+  }
   await AsyncStorage.removeItem(LAST_PROFILE_KEY);
-
-  await clearHolderSession();
 }

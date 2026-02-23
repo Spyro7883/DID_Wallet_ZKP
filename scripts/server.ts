@@ -611,13 +611,13 @@ app.post("/connect/confirm", async (req, res) => {
       return res.status(400).json({ error: "challenge_expired" });
     }
 
-    const expected = JSON.stringify({
-      id: ch.id,
-      challenge: ch.challenge,
-      ts: payload?.ts ?? 0,
-    });
-    if (JSON.stringify(payload) !== expected)
+    if (
+      !payload ||
+      payload.id !== ch.id ||
+      payload.challenge !== ch.challenge
+    ) {
       return res.status(400).json({ error: "payload_mismatch" });
+    }
 
     const didDoc = await agent.resolveDid({ didUrl: holderDid });
     const { type, pub } = extractPubKeyFromDidDoc(didDoc);
