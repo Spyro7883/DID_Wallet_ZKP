@@ -11,6 +11,9 @@ const HOLDER_DID_KEY = (profile: string) =>
 const ISSUER_DID_KEY = (profile: string) =>
   `didwallet_issuer_did_${safeKey(profile)}`;
 
+const LAST_VC_REQUEST_ID_KEY = (profile: string) =>
+  `didwallet_last_vc_request_${safeKey(profile)}`;
+
 function safeKey(s: string) {
   const out = (s || "")
     .trim()
@@ -108,4 +111,27 @@ export async function clearLastWallet() {
     await clearHolderSession(profileName);
   }
   await AsyncStorage.removeItem(LAST_PROFILE_KEY);
+}
+
+export async function saveLastVcRequest(
+  profileName: string,
+  requestId: number,
+) {
+  const p = safeKey(profileName);
+  await AsyncStorage.setItem(LAST_VC_REQUEST_ID_KEY(p), String(requestId));
+}
+
+export async function loadLastVcRequest(
+  profileName: string,
+): Promise<number | null> {
+  const p = safeKey(profileName);
+  const v = await AsyncStorage.getItem(LAST_VC_REQUEST_ID_KEY(p));
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+export async function clearLastVcRequest(profileName: string) {
+  const p = safeKey(profileName);
+  await AsyncStorage.removeItem(LAST_VC_REQUEST_ID_KEY(p));
 }

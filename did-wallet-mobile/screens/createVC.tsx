@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
     SafeAreaView,
     View,
@@ -11,9 +11,9 @@ import {
     Platform,
     ScrollView,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
-import { loadLastWallet } from "../src/storage/walletSession";
+import { loadLastWallet, saveLastVcRequest, loadLastVcRequest, clearLastVcRequest } from "../src/storage/walletSession";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
@@ -47,7 +47,6 @@ const rid = () => Math.random().toString(16).slice(2) + Date.now().toString(16);
 const notify = (title: string, message: string) => {
     console.log(`[${title}] ${message}`);
     if (Platform.OS === "web") {
-        // @ts-ignore
         window.alert(`${title}\n\n${message}`);
     } else {
         Alert.alert(title, message);
@@ -249,33 +248,35 @@ export default function CreateCredentialScreen() {
             }
 
             if (detail.status !== "pending") {
-                if (pollRef.current) {
-                    clearInterval(pollRef.current);
-                    pollRef.current = null;
-                }
+                const sess = await loadLastWallet();
+                if (sess?.profileName) await clearLastVcRequest(sess.profileName);
             }
         } finally {
             setLoadingStatus(false);
         }
     }
 
-    useEffect(() => {
-        if (!requestId) return;
+    useFocusEffect(
+        useCallback(() => {
+            let alive = true;
 
-        fetchRequestStatus(requestId).catch(() => { });
+            (async () => {
+                const sess = await loadLastWallet();
+                if (!alive || !sess?.profileName) return;
 
-        if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = setInterval(() => {
-            fetchRequestStatus(requestId).catch(() => { });
-        }, 4000);
+                const lastId = await loadLastVcRequest(sess.profileName);
+                if (!alive) return;
 
-        return () => {
-            if (pollRef.current) {
-                clearInterval(pollRef.current);
-                pollRef.current = null;
-            }
-        };
-    }, [requestId]);
+                if (lastId && !requestId) {
+                    setRequestId(lastId);
+                }
+            })().catch(() => { });
+
+            return () => {
+                alive = false;
+            };
+        }, [requestId])
+    );
 
     const submitRequest = async () => {
         console.log("submitRequest: start", { BASE_URL });
@@ -332,6 +333,8 @@ export default function CreateCredentialScreen() {
             setRequestId(id);
             setRequestDetail(null);
             setImported(false);
+
+            await saveLastVcRequest(sess.profileName, id);
 
             notify("Request submitted", `Request #${id} is pending approval`);
         } catch (e: any) {

@@ -1648,40 +1648,45 @@ app.post("/wallets/vcs/list", async (req, res) => {
 
 app.post("/wallets/vcs/save", async (req, res) => {
   try {
-    const profile = String(req.body?.profile || "").trim();
-    const passphrase = String(req.body?.passphrase || "");
-    const vcJwt = req.body?.vcJwt;
-    const vcObj = req.body?.vc;
+    const { profile, passphrase, vcJwt } = req.body || {};
 
-    if (!profile || !passphrase || (!vcJwt && !vcObj)) {
+    if (!profile || !passphrase || !vcJwt) {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
 
-    const walletAgent = await setupAgent(profile, passphrase);
+    const walletAgent = await setupAgent(
+      String(profile).trim(),
+      String(passphrase),
+    );
 
-    const verifiableCredential =
-      typeof vcJwt === "string" && vcJwt.length ? vcJwt : vcObj;
+    const vc = typeof vcJwt === "string" ? vcJwt.trim() : vcJwt;
 
     try {
       const saved = await walletAgent.dataStoreSaveVerifiableCredential({
-        verifiableCredential,
+        verifiableCredential: vc,
       });
-      return res.json({ ok: true, hash: saved?.hash });
+
+      return res.json({
+        ok: true,
+        hash: saved?.hash ?? null,
+      });
     } catch (e: any) {
-      const msg = String(e?.message || "");
+      const msg = String(e?.message || e);
       if (
         msg.toLowerCase().includes("duplicate") ||
         msg.toLowerCase().includes("unique")
       ) {
-        return res.json({ ok: true, alreadyExists: true });
+        return res.json({ ok: true, hash: null, existed: true });
       }
       throw e;
     }
   } catch (e: any) {
-    console.error("[/wallets/vcs/save] error:", e?.message || e);
-    return res
-      .status(500)
-      .json({ ok: false, error: "save_failed", message: e?.message });
+    console.error("[/wallets/vcs/save] error:", e?.stack || e?.message || e);
+    return res.status(500).json({
+      ok: false,
+      error: "save_vc_failed",
+      message: String(e?.message || e),
+    });
   }
 });
 
