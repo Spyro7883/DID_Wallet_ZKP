@@ -1646,10 +1646,57 @@ app.post("/wallets/vcs/list", async (req, res) => {
   }
 });
 
+function jwtPayload(jwt: string) {
+  const parts = String(jwt).split(".");
+  if (parts.length !== 3) throw new Error("bad_jwt");
+  const p = Buffer.from(parts[1], "base64url").toString("utf8");
+  return JSON.parse(p);
+}
+
+function vcObjectFromJwt(jwt: string) {
+  const payload = jwtPayload(jwt);
+
+  const vc = payload?.vc;
+  if (!vc || typeof vc !== "object" || Array.isArray(vc)) {
+    throw new Error("jwt_missing_vc");
+  }
+
+  const issuer = vc.issuer ?? (payload.iss ? { id: payload.iss } : undefined);
+  const subject =
+    typeof vc.credentialSubject === "object" && vc.credentialSubject
+      ? {
+          ...vc.credentialSubject,
+          id: vc.credentialSubject.id ?? payload.sub,
+        }
+      : payload.sub
+      ? { id: payload.sub }
+      : vc.credentialSubject;
+
+  const issuanceDate =
+    vc.issuanceDate ??
+    (payload.nbf
+      ? new Date(Number(payload.nbf) * 1000).toISOString()
+      : undefined);
+
+  const expirationDate =
+    vc.expirationDate ??
+    (payload.exp
+      ? new Date(Number(payload.exp) * 1000).toISOString()
+      : undefined);
+
+  return {
+    ...vc,
+    issuer,
+    credentialSubject: subject,
+    issuanceDate,
+    expirationDate,
+    proof: { type: "JwtProof2020", jwt },
+  };
+}
+
 app.post("/wallets/vcs/save", async (req, res) => {
   try {
     const { profile, passphrase, vcJwt } = req.body || {};
-
     if (!profile || !passphrase || !vcJwt) {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
@@ -1659,17 +1706,15 @@ app.post("/wallets/vcs/save", async (req, res) => {
       String(passphrase),
     );
 
-    const vc = typeof vcJwt === "string" ? vcJwt.trim() : vcJwt;
+    const vc =
+      typeof vcJwt === "string" ? vcObjectFromJwt(vcJwt.trim()) : vcJwt;
 
     try {
       const saved = await walletAgent.dataStoreSaveVerifiableCredential({
         verifiableCredential: vc,
       });
 
-      return res.json({
-        ok: true,
-        hash: saved?.hash ?? null,
-      });
+      return res.json({ ok: true, hash: saved?.hash ?? null });
     } catch (e: any) {
       const msg = String(e?.message || e);
       if (
