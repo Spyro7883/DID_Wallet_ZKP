@@ -886,6 +886,72 @@ app.post("/vc/requests", requireHolder, async (req, res) => {
   }
 });
 
+app.get("/vc/requests", requireHolder, async (req, res) => {
+  try {
+    const holderDid = String((req as any).holder?.holderDid || "").trim();
+
+    const status = String(req.query?.status || "all").toLowerCase();
+    const allowed = new Set(["pending", "approved", "rejected", "all"]);
+    const st = allowed.has(status) ? status : "all";
+
+    const limit = Math.min(100, Math.max(1, Number(req.query?.limit || 20)));
+    const offset = Math.max(0, Number(req.query?.offset || 0));
+
+    const d = await ds();
+    try {
+      let where = `WHERE holder_did = $1`;
+      const params: any[] = [holderDid];
+
+      if (st !== "all") {
+        where += ` AND status = $2`;
+        params.push(st);
+      }
+
+      params.push(limit, offset);
+
+      const rows = await d.query(
+        `
+        SELECT id, status, holder_did, subject_did, vc_type, claims,
+               validity_days, created_at, decided_at, decided_by, decision_note,
+               issued_vc_hash, issued_vc_jwt
+        FROM public.vc_requests
+        ${where}
+        ORDER BY created_at DESC
+        LIMIT $${params.length - 1} OFFSET $${params.length}
+        `,
+        params,
+      );
+
+      const items = (rows || []).map((r: any) => ({
+        id: Number(r.id),
+        status: String(r.status),
+        holderDid: String(r.holder_did),
+        subjectDid: String(r.subject_did),
+        vcType: String(r.vc_type),
+        claims: r.claims ?? {},
+        validityDays: r.validity_days ?? null,
+        createdAt: String(r.created_at),
+        decidedAt: r.decided_at ? String(r.decided_at) : null,
+        decidedBy: r.decided_by ? String(r.decided_by) : null,
+        decisionNote: r.decision_note ? String(r.decision_note) : null,
+        issued: r.issued_vc_hash
+          ? {
+              vcHash: String(r.issued_vc_hash),
+              vcJwt: r.issued_vc_jwt ? String(r.issued_vc_jwt) : null,
+            }
+          : null,
+      }));
+
+      return res.json({ ok: true, items });
+    } finally {
+      await d.destroy();
+    }
+  } catch (e: any) {
+    console.error("[GET /vc/requests] error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "list_failed" });
+  }
+});
+
 app.get("/vc/requests/:id", requireHolder, async (req, res) => {
   const holderDid = String((req as any).holder?.holderDid || "").trim();
   const id = Number(req.params.id);

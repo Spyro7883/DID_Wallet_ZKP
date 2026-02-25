@@ -130,10 +130,19 @@ export default function CreateCredentialScreen() {
     const [imported, setImported] = useState(false);
 
     const [requestId, setRequestId] = useState<number | null>(null);
-    const [requestDetail, setRequestDetail] = useState<VcRequestDetail | null>(null);
     const [loadingStatus, setLoadingStatus] = useState(false);
 
-    const pollRef = useRef<any>(null);
+    const [requests, setRequests] = useState<VcRequestDetail[]>([]);
+    const [syncing, setSyncing] = useState(false);
+
+    const importedReqIdsRef = useRef<Set<number>>(new Set());
+
+    const syncingRef = useRef(false);
+
+    const selectedReq = useMemo(
+        () => (requestId ? requests.find((x) => x.id === requestId) ?? null : null),
+        [requests, requestId]
+    );
 
     const DEFAULT_FIELDS: Record<VCType, { key: string; value: string }[]> = {
         CitizenshipCredential: [{ key: "citizenship", value: "RO" }],
@@ -195,6 +204,65 @@ export default function CreateCredentialScreen() {
         if (!r.ok || !j?.ok) throw new Error(j?.error || j?.message || "save_vc_failed");
     }
 
+    const syncRequests = useCallback(async () => {
+        if (syncingRef.current) return;
+
+        syncingRef.current = true;
+        setSyncing(true);
+
+        try {
+            const sess = await loadLastWallet();
+            if (!sess?.holderToken || !sess?.profileName) return;
+            if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+
+            const resp = await fetch(`${BASE_URL}/vc/requests?status=all&limit=50&offset=0`, {
+                method: "GET",
+                headers: { Authorization: `Bearer ${sess.holderToken}` },
+            });
+
+            const { json, text } = await readJsonSafe(resp);
+            if (!resp.ok) throw new Error((json && (json.error || json.message)) || text || `HTTP ${resp.status}`);
+            if (!json?.ok || !Array.isArray(json.items)) throw new Error("bad_list_response");
+
+            const items: VcRequestDetail[] = json.items;
+            setRequests(items);
+
+            if (!requestId) {
+                const last = await loadLastVcRequest(sess.profileName).catch(() => null);
+                const fallback =
+                    (last && items.find((x) => x.id === last)?.id) ||
+                    items.find((x) => x.status === "pending")?.id ||
+                    items[0]?.id ||
+                    null;
+
+                if (fallback) {
+                    setRequestId(fallback);
+                    await saveLastVcRequest(sess.profileName, fallback).catch(() => { });
+                }
+            }
+
+            let importedCount = 0;
+            for (const r of items) {
+                if (r.status === "approved" && r.issued?.vcJwt) {
+                    if (!importedReqIdsRef.current.has(r.id)) {
+                        await importIssuedVc(r.issued.vcJwt);
+                        importedReqIdsRef.current.add(r.id);
+                        importedCount++;
+                    }
+                }
+            }
+
+            if (importedCount > 0) {
+                notify("Synced", `Imported ${importedCount} approved credential(s) into wallet.`);
+            }
+        } catch (e: any) {
+            console.error("syncRequests error:", e);
+        } finally {
+            syncingRef.current = false;
+            setSyncing(false);
+        }
+    }, [requestId, importIssuedVc]);
+
     async function fetchRequestStatus(id: number) {
         const sess = await loadLastWallet();
         if (!sess?.holderToken) throw new Error("Missing holder token. Pair first.");
@@ -234,8 +302,6 @@ export default function CreateCredentialScreen() {
                     : null,
             };
 
-            setRequestDetail(detail);
-
             if (!imported && detail.status === "approved" && detail.issued?.vcJwt) {
                 setImported(true);
                 try {
@@ -258,24 +324,14 @@ export default function CreateCredentialScreen() {
 
     useFocusEffect(
         useCallback(() => {
-            let alive = true;
+            syncRequests();
 
-            (async () => {
-                const sess = await loadLastWallet();
-                if (!alive || !sess?.profileName) return;
+            const t = setInterval(() => {
+                syncRequests();
+            }, 4000);
 
-                const lastId = await loadLastVcRequest(sess.profileName);
-                if (!alive) return;
-
-                if (lastId && !requestId) {
-                    setRequestId(lastId);
-                }
-            })().catch(() => { });
-
-            return () => {
-                alive = false;
-            };
-        }, [requestId])
+            return () => clearInterval(t);
+        }, [syncRequests])
     );
 
     const submitRequest = async () => {
@@ -331,7 +387,6 @@ export default function CreateCredentialScreen() {
             if (!Number.isFinite(id)) throw new Error("bad_request_id");
 
             setRequestId(id);
-            setRequestDetail(null);
             setImported(false);
 
             await saveLastVcRequest(sess.profileName, id);
@@ -346,11 +401,11 @@ export default function CreateCredentialScreen() {
     };
 
     const statusLabel =
-        requestDetail?.status === "approved"
+        selectedReq?.status === "approved"
             ? "Approved"
-            : requestDetail?.status === "rejected"
+            : selectedReq?.status === "rejected"
                 ? "Rejected"
-                : requestDetail?.status === "pending"
+                : selectedReq?.status === "pending"
                     ? "Pending"
                     : requestId
                         ? "Pending"
@@ -364,6 +419,61 @@ export default function CreateCredentialScreen() {
                 keyboardDismissMode="on-drag"
             >
                 <Text style={styles.title}>Request VC</Text>
+
+                <View style={{ marginBottom: 12 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                        <Text style={{ color: "white", fontWeight: "800" }}>Your requests</Text>
+
+                        <Pressable
+                            onPress={syncRequests}
+                            style={[styles.refreshBtn, syncing && { opacity: 0.6 }]}
+                            disabled={syncing}
+                        >
+                            {syncing ? (
+                                <ActivityIndicator />
+                            ) : (
+                                <>
+                                    <MaterialIcons name="sync" size={18} color="#111827" />
+                                    <Text style={styles.refreshText}>Sync</Text>
+                                </>
+                            )}
+                        </Pressable>
+                    </View>
+
+                    <View style={{ marginTop: 10, gap: 8 }}>
+                        {(requests || []).slice(0, 10).map((r) => {
+                            const active = r.id === requestId;
+                            const st = r.status.toUpperCase();
+                            return (
+                                <Pressable
+                                    key={r.id}
+                                    onPress={async () => {
+                                        setRequestId(r.id);
+                                        const sess = await loadLastWallet();
+                                        if (sess?.profileName) await saveLastVcRequest(sess.profileName, r.id).catch(() => { });
+                                    }}
+                                    style={{
+                                        padding: 10,
+                                        borderRadius: 12,
+                                        borderWidth: 1,
+                                        borderColor: active ? "#D8B4FE" : "rgba(229,231,235,0.15)",
+                                        backgroundColor: active ? "rgba(243,232,255,0.15)" : "rgba(255,255,255,0.04)",
+                                    }}
+                                >
+                                    <Text style={{ color: "white", fontWeight: "800" }}>
+                                        #{r.id} · {r.vcType} · {st}
+                                    </Text>
+                                    <Text style={{ color: "#C7CDD6", marginTop: 2, fontSize: 12 }}>
+                                        {r.createdAt?.slice(0, 19).replace("T", " ")}
+                                    </Text>
+                                </Pressable>
+                            );
+                        })}
+                        {requests.length === 0 ? (
+                            <Text style={{ color: "#9CA3AF", marginTop: 6 }}>No requests yet</Text>
+                        ) : null}
+                    </View>
+                </View>
 
                 <Text style={styles.label}>Your DID (subject = holder)</Text>
                 <TextInput
@@ -476,20 +586,20 @@ export default function CreateCredentialScreen() {
                             </Pressable>
                         </View>
 
-                        {requestDetail?.decisionNote ? (
-                            <Text style={styles.statusNote}>Note: {requestDetail.decisionNote}</Text>
+                        {selectedReq?.decisionNote ? (
+                            <Text style={styles.statusNote}>Note: {selectedReq.decisionNote}</Text>
                         ) : null}
 
-                        {requestDetail?.issued?.vcHash ? (
+                        {selectedReq?.issued?.vcHash ? (
                             <View style={{ marginTop: 10 }}>
                                 <Text style={styles.statusSub}>Issued VC hash:</Text>
-                                <Text style={styles.mono}>{requestDetail.issued.vcHash}</Text>
+                                <Text style={styles.mono}>{selectedReq.issued.vcHash}</Text>
 
-                                {requestDetail.issued.vcJwt ? (
+                                {selectedReq.issued.vcJwt ? (
                                     <>
                                         <Text style={[styles.statusSub, { marginTop: 8 }]}>VC JWT:</Text>
                                         <Text style={styles.monoSmall} numberOfLines={6}>
-                                            {requestDetail.issued.vcJwt}
+                                            {selectedReq.issued.vcJwt}
                                         </Text>
                                     </>
                                 ) : null}
