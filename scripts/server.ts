@@ -750,6 +750,70 @@ function requireHolder(req: any, res: any, next: any) {
   }
 }
 
+function sigToB64u(sig: string): string {
+  const s = String(sig || "").trim();
+
+  if (/^[0-9a-f]+$/i.test(s) && s.length % 2 === 0) {
+    return base64url.encode(Buffer.from(s, "hex"));
+  }
+
+  try {
+    base64url.decode(s);
+    return s;
+  } catch {}
+
+  try {
+    return base64url.encode(Buffer.from(s, "base64"));
+  } catch {}
+
+  return base64url.encode(Buffer.from(s, "utf8"));
+}
+
+app.post("/wallets/sign", async (req, res) => {
+  try {
+    const { profile, passphrase, did, payload } = req.body || {};
+    if (!profile || !passphrase || !did || !payload) {
+      return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
+
+    const walletAgent = await setupAgent(
+      String(profile).trim(),
+      String(passphrase),
+    );
+
+    const dids = await walletAgent.didManagerFind();
+    const ident = (dids || []).find((i: any) => String(i.did) === String(did));
+    if (!ident)
+      return res.status(404).json({ ok: false, error: "did_not_found" });
+
+    const keyRef = ident.keys?.[0]?.kid || ident.controllerKeyId || ident.kid;
+
+    if (!keyRef)
+      return res.status(400).json({ ok: false, error: "no_key_for_did" });
+
+    const keyType = String(ident.keys?.[0]?.type || "").toLowerCase();
+    const algorithm = keyType.includes("ed25519") ? "EdDSA" : "ES256K";
+
+    const data = JSON.stringify(payload);
+
+    const sigRaw: string = await (walletAgent as any).keyManagerSign({
+      keyRef,
+      data,
+      encoding: "utf-8",
+      algorithm,
+    });
+
+    const sig = sigToB64u(sigRaw);
+
+    return res.json({ ok: true, alg: algorithm, sig });
+  } catch (e: any) {
+    console.error("[/wallets/sign] error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "sign_failed", message: e?.message });
+  }
+});
+
 app.post("/vc/requests", requireHolder, async (req, res) => {
   try {
     const holderDid = String((req as any).holder?.holderDid || "").trim();
@@ -770,7 +834,6 @@ app.post("/vc/requests", requireHolder, async (req, res) => {
         .json({ ok: false, error: "claims_must_be_object" });
     }
 
-    // subjectDid: by default holderDid; keep self-issuance safe
     const subjectDid = String(req.body?.subjectDid || holderDid).trim();
     if (subjectDid !== holderDid) {
       return res

@@ -8,6 +8,7 @@ import WalletScreen from "./screens/walletScreen";
 import WalletItems from "./screens/walletItems";
 import BackupScreen from "./screens/createBackup";
 import ImportBackupScreen from "./screens/importBackup";
+import ConnectIssuer from "./screens/connectIssuer";
 
 import type { RootStackParamList } from "./src/navigation/types";
 import { loadLastWallet } from "./src/storage/walletSession";
@@ -50,6 +51,7 @@ export default function App() {
         <Stack.Screen name="WalletItems" component={WalletItems} options={{ headerShown: false }} />
         <Stack.Screen name="Backup" component={BackupScreen} />
         <Stack.Screen name="ImportBackup" component={ImportBackupScreen} />
+        <Stack.Screen name="ConnectIssuer" component={ConnectIssuer} />
         <Stack.Screen name="CreateDid" component={CreateDid} />
         <Stack.Screen name="CreateCredential" component={CreateVC} />
         <Stack.Screen name="CreatePresentation" component={CreateVP} />

@@ -16,6 +16,7 @@ type Props = {
     onCreateBackup: () => void;
     onImportBackup: () => void;
     onLogout: () => void;
+    onConnectIssuer: () => void;
 };
 
 function SheetItem({
@@ -64,8 +65,8 @@ export default function SettingsSheet({
     visible,
     onClose,
     onCreateBackup,
-    onImportBackup,
     onLogout,
+    onConnectIssuer,
 }: Props) {
     const translateY = useRef(new Animated.Value(420)).current;
     const [mounted, setMounted] = useState(visible);
@@ -107,23 +108,36 @@ export default function SettingsSheet({
                         title="Create backup"
                         subtitle="Export an encrypted backup file"
                         icon="backup"
-                        onPress={onCreateBackup}
+                        onPress={() => {
+                            onClose();
+                            onCreateBackup();
+                        }}
                         showChevron
                     />
-                    {/* <View style={styles.divider} />
-                    <SheetItem
-                        title="Import backup"
-                        subtitle="Restore from a .wallet.json file"
-                        icon="restore"
-                        onPress={onImportBackup}
-                        showChevron
-                    /> */}
+
                     <View style={styles.divider} />
+
+                    <SheetItem
+                        title="Connect issuer"
+                        subtitle="Pair to obtain holder token"
+                        icon="link"
+                        onPress={() => {
+                            onClose();
+                            onConnectIssuer();
+                        }}
+                        showChevron
+                    />
+
+                    <View style={styles.divider} />
+
                     <SheetItem
                         title="Logout"
                         subtitle="End this session on this device"
                         icon="logout"
-                        onPress={onLogout}
+                        onPress={() => {
+                            onClose();
+                            onLogout();
+                        }}
                         showChevron={false}
                         destructive
                     />
@@ -141,7 +155,6 @@ const styles = StyleSheet.create({
         right: 0,
         bottom: 0,
         zIndex: 2,
-
         backgroundColor: "#FFFFFF",
         borderTopLeftRadius: 22,
         borderTopRightRadius: 22,

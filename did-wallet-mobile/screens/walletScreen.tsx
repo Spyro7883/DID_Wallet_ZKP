@@ -271,9 +271,9 @@ export default function WalletScreen() {
                 onCreateBackup={goCreateBackup}
                 onImportBackup={goImportBackup}
                 onLogout={doLogout}
+                onConnectIssuer={() => navigation.navigate("ConnectIssuer")}
             />
 
-            {/* ✅ același popup ca în WalletItems */}
             <ItemDetailsPopup
                 visible={detailsOpen}
                 item={
