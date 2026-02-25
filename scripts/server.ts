@@ -1646,50 +1646,42 @@ app.post("/wallets/vcs/list", async (req, res) => {
   }
 });
 
-app.post("/wallets/vcs/issue-demo", async (req, res) => {
+app.post("/wallets/vcs/save", async (req, res) => {
   try {
-    const { profile, passphrase, subjectDid, claims, type, validitySeconds } =
-      req.body || {};
-    if (!profile || !passphrase || !subjectDid || typeof claims !== "object") {
+    const profile = String(req.body?.profile || "").trim();
+    const passphrase = String(req.body?.passphrase || "");
+    const vcJwt = req.body?.vcJwt;
+    const vcObj = req.body?.vc;
+
+    if (!profile || !passphrase || (!vcJwt && !vcObj)) {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
 
-    const walletAgent = await setupAgent(
-      String(profile).trim(),
-      String(passphrase),
-    );
+    const walletAgent = await setupAgent(profile, passphrase);
 
-    const issuanceDate = new Date().toISOString();
-    const expSec = validitySeconds
-      ? Math.floor(Date.now() / 1000) + Number(validitySeconds)
-      : undefined;
+    const verifiableCredential =
+      typeof vcJwt === "string" && vcJwt.length ? vcJwt : vcObj;
 
-    const vc = await agent.createVerifiableCredential({
-      credential: {
-        issuer: { id: ISSUER_DID },
-        issuanceDate,
-        expirationDate: expSec
-          ? new Date(expSec * 1000).toISOString()
-          : undefined,
-        type: [
-          "VerifiableCredential",
-          ...(Array.isArray(type) ? type : type ? [type] : ["DemoCredential"]),
-        ],
-        credentialSubject: { id: String(subjectDid), ...(claims || {}) },
-      },
-      proofFormat: "jwt",
-    });
-
-    const saved = await walletAgent.dataStoreSaveVerifiableCredential({
-      verifiableCredential: vc,
-    });
-
-    return res.json({ ok: true, hash: saved?.hash, vc });
+    try {
+      const saved = await walletAgent.dataStoreSaveVerifiableCredential({
+        verifiableCredential,
+      });
+      return res.json({ ok: true, hash: saved?.hash });
+    } catch (e: any) {
+      const msg = String(e?.message || "");
+      if (
+        msg.toLowerCase().includes("duplicate") ||
+        msg.toLowerCase().includes("unique")
+      ) {
+        return res.json({ ok: true, alreadyExists: true });
+      }
+      throw e;
+    }
   } catch (e: any) {
-    console.error("[wallets/vcs/issue-demo] error:", e?.message || e);
+    console.error("[/wallets/vcs/save] error:", e?.message || e);
     return res
       .status(500)
-      .json({ ok: false, error: "issue_demo_failed", message: e?.message });
+      .json({ ok: false, error: "save_failed", message: e?.message });
   }
 });
 

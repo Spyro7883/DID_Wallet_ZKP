@@ -128,7 +128,8 @@ export default function CreateCredentialScreen() {
     const [loading, setLoading] = useState(false);
     const canCreate = useMemo(() => !loading, [loading]);
 
-    // request flow state
+    const [imported, setImported] = useState(false);
+
     const [requestId, setRequestId] = useState<number | null>(null);
     const [requestDetail, setRequestDetail] = useState<VcRequestDetail | null>(null);
     const [loadingStatus, setLoadingStatus] = useState(false);
@@ -177,6 +178,24 @@ export default function CreateCredentialScreen() {
     const updateRow = (id: string, patch: Partial<ClaimRow>) =>
         setClaimRows((p) => p.map((x) => (x.id === id ? { ...x, ...patch } : x)));
 
+    async function importIssuedVc(vcJwt: string) {
+        const sess = await loadLastWallet();
+        if (!sess?.profileName || !sess?.passphrase) throw new Error("missing_session");
+        if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+
+        const r = await fetch(`${BASE_URL}/wallets/vcs/save`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                profile: sess.profileName,
+                passphrase: sess.passphrase,
+                vcJwt,
+            }),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j?.ok) throw new Error(j?.error || j?.message || "save_vc_failed");
+    }
+
     async function fetchRequestStatus(id: number) {
         const sess = await loadLastWallet();
         if (!sess?.holderToken) throw new Error("Missing holder token. Pair first.");
@@ -190,8 +209,9 @@ export default function CreateCredentialScreen() {
                     Authorization: `Bearer ${sess.holderToken}`,
                 },
             });
-            const json = await resp.json();
-            if (!resp.ok || !json.ok) throw new Error(json.error || json.message || "status_failed");
+            const { json, text } = await readJsonSafe(resp);
+            if (!resp.ok) throw new Error((json && (json.error || json.message)) || text || `HTTP ${resp.status}`);
+            if (!json?.ok) throw new Error(json?.error || json?.message || "status_failed");
 
             const r = json.request as any;
 
@@ -216,6 +236,17 @@ export default function CreateCredentialScreen() {
             };
 
             setRequestDetail(detail);
+
+            if (!imported && detail.status === "approved" && detail.issued?.vcJwt) {
+                setImported(true);
+                try {
+                    await importIssuedVc(detail.issued.vcJwt);
+                    notify("Saved", "VC was saved into your wallet.");
+                } catch (e: any) {
+                    setImported(false);
+                    throw e;
+                }
+            }
 
             if (detail.status !== "pending") {
                 if (pollRef.current) {
@@ -260,7 +291,7 @@ export default function CreateCredentialScreen() {
             }
             if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
 
-            const holderToken = (sess as any)?.holderToken;
+            const holderToken = sess.holderToken;
             if (!holderToken) throw new Error("Missing holderToken. Pair first (/connect/*).");
 
             const { claims, error } = buildClaims(claimRows);
@@ -300,6 +331,7 @@ export default function CreateCredentialScreen() {
 
             setRequestId(id);
             setRequestDetail(null);
+            setImported(false);
 
             notify("Request submitted", `Request #${id} is pending approval`);
         } catch (e: any) {
