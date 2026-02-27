@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState, useCallback } from "react";
 import { useFocusEffect } from "@react-navigation/native";
 
 import {
-    SafeAreaView,
     View,
     Text,
     StyleSheet,
@@ -12,8 +11,7 @@ import {
     ActivityIndicator,
     Alert,
     Platform,
-    Modal,
-    ScrollView
+    StatusBar,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useNavigation, useRoute, RouteProp } from "@react-navigation/native";
@@ -21,6 +19,9 @@ import type { RootStackParamList, WalletKind } from "../src/navigation/types";
 import { loadLastWallet } from "../src/storage/walletSession";
 import CreateItem from "./createItems";
 import { ItemDetailsPopup } from "./itemDetailsPopup";
+import { COLORS } from "../src/theme/colors";
+
+import { SafeAreaView } from "react-native-safe-area-context";
 
 type RouteT = RouteProp<RootStackParamList, "WalletItems">;
 
@@ -58,7 +59,6 @@ export default function WalletItemsScreen() {
     const [detailsLoading, setDetailsLoading] = useState(false);
     const [detailsError, setDetailsError] = useState("");
     const [detailsData, setDetailsData] = useState<any>(null);
-
 
     useEffect(() => {
         const t = setTimeout(() => setQDebounced(q.trim()), 250);
@@ -114,13 +114,59 @@ export default function WalletItemsScreen() {
         return c ? c.label : "Wallet items";
     }, [kind]);
 
+    const closeDetails = () => {
+        setDetailsOpen(false);
+        setSelected(null);
+        setDetailsLoading(false);
+        setDetailsError("");
+        setDetailsData(null);
+    };
+
+    const openDetails = useCallback(
+        async (it: Item) => {
+            setSelected(it);
+            setDetailsOpen(true);
+            setDetailsError("");
+            setDetailsData(null);
+
+            try {
+                setDetailsLoading(true);
+
+                const sess = await loadLastWallet();
+                if (!sess?.profileName || !sess?.passphrase) {
+                    closeDetails();
+                    navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
+                    return;
+                }
+
+                const r = await fetch(`${BASE_URL}/wallets/item`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        profile: sess.profileName,
+                        passphrase: sess.passphrase,
+                        kind: it.kind,
+                        id: it.id,
+                    }),
+                });
+
+                const j = await r.json().catch(() => ({}));
+                if (!r.ok || !j?.ok) throw new Error(j?.error || "item_failed");
+
+                setDetailsData(j.item);
+            } catch (e: any) {
+                setDetailsError(e?.message || "Could not load item details");
+            } finally {
+                setDetailsLoading(false);
+            }
+        },
+        [navigation],
+    );
+
     const renderItem = ({ item }: { item: Item }) => {
         const badge = item.kind.toUpperCase();
         return (
-            <Pressable
-                style={styles.card}
-                onPress={() => openDetails(item)}
-            >
+            <Pressable style={styles.card} onPress={() => openDetails(item)}>
                 <View style={styles.cardRow}>
                     <View style={styles.badge}>
                         <Text style={styles.badgeText}>{badge}</Text>
@@ -130,10 +176,10 @@ export default function WalletItemsScreen() {
                         <Text style={styles.cardTitle} numberOfLines={1}>
                             {item.title}
                         </Text>
-                        <Text style={styles.cardSub} numberOfLines={2}>
+                        <Text style={styles.cardSub} numberOfLines={2} ellipsizeMode="tail">
                             {item.line1}
                         </Text>
-                        <Text style={styles.cardSub} numberOfLines={1}>
+                        <Text style={styles.cardSub} numberOfLines={1} ellipsizeMode="tail">
                             {item.line2}
                         </Text>
                     </View>
@@ -142,76 +188,31 @@ export default function WalletItemsScreen() {
         );
     };
 
-    const closeDetails = () => {
-        setDetailsOpen(false);
-        setSelected(null);
-        setDetailsLoading(false);
-        setDetailsError("");
-        setDetailsData(null);
-    };
-
-    const openDetails = useCallback(async (it: Item) => {
-        setSelected(it);
-        setDetailsOpen(true);
-        setDetailsError("");
-        setDetailsData(null);
-
-        try {
-            setDetailsLoading(true);
-
-            const sess = await loadLastWallet();
-            if (!sess?.profileName || !sess?.passphrase) {
-                closeDetails();
-                navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
-                return;
-            }
-
-            const r = await fetch(`${BASE_URL}/wallets/item`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    profile: sess.profileName,
-                    passphrase: sess.passphrase,
-                    kind: it.kind,
-                    id: it.id,
-                }),
-            });
-
-            const j = await r.json().catch(() => ({}));
-            if (!r.ok || !j?.ok) throw new Error(j?.error || "item_failed");
-
-            setDetailsData(j.item);
-        } catch (e: any) {
-            setDetailsError(e?.message || "Could not load item details");
-        } finally {
-            setDetailsLoading(false);
-        }
-    }, [navigation]);
-
+    const TOP_PAD = Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) + 12 : 12;
 
     return (
-        <SafeAreaView style={styles.container}>
-            {/* header */}
-            <View style={styles.headerRow}>
-                <Pressable onPress={() => navigation.goBack()} hitSlop={10}>
-                    <MaterialIcons name="arrow-back" size={24} color="#111827" />
+        <SafeAreaView style={[styles.container, { paddingTop: TOP_PAD }]}>
+            {/* header (centered) */}
+            <View style={styles.topBar}>
+                <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={styles.topLeft}>
+                    <MaterialIcons name="arrow-back" size={24} color={COLORS.text} />
                 </Pressable>
 
-                <Text style={styles.headerTitle}>Wallet items</Text>
+                <Text style={styles.topTitle}>{title}</Text>
 
-                <Pressable onPress={() => setCreateOpen(true)} hitSlop={10}>
-                    <MaterialIcons name="add" size={24} color="#111827" />
+                <Pressable onPress={() => setCreateOpen(true)} hitSlop={10} style={styles.topRight}>
+                    <MaterialIcons name="add" size={24} color={COLORS.text} />
                 </Pressable>
             </View>
 
             {/* search */}
             <View style={styles.searchBox}>
-                <MaterialIcons name="search" size={20} color="#6B7280" />
+                <MaterialIcons name="search" size={20} color={COLORS.subtle} />
                 <TextInput
                     value={q}
                     onChangeText={setQ}
                     placeholder="Search DIDs, credentials, presentations"
-                    placeholderTextColor="#6B7280"
+                    placeholderTextColor={COLORS.subtle}
                     style={styles.searchInput}
                 />
             </View>
@@ -226,9 +227,7 @@ export default function WalletItemsScreen() {
                             onPress={() => setKind(c.value)}
                             style={[styles.chip, active && styles.chipActive]}
                         >
-                            <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                                {c.label}
-                            </Text>
+                            <Text style={[styles.chipText, active && styles.chipTextActive]}>{c.label}</Text>
                         </Pressable>
                     );
                 })}
@@ -244,12 +243,11 @@ export default function WalletItemsScreen() {
                     data={items}
                     keyExtractor={(x) => `${x.kind}:${x.id}`}
                     renderItem={renderItem}
-                    contentContainerStyle={{ paddingVertical: 12 }}
-                    ListEmptyComponent={
-                        <Text style={styles.empty}>No items yet</Text>
-                    }
+                    contentContainerStyle={{ paddingVertical: 12, paddingBottom: 20 }}
+                    ListEmptyComponent={<Text style={styles.empty}>No items yet</Text>}
                 />
             )}
+
             <CreateItem
                 visible={createOpen}
                 onClose={() => setCreateOpen(false)}
@@ -266,6 +264,7 @@ export default function WalletItemsScreen() {
                     navigation.navigate("CreatePresentation");
                 }}
             />
+
             <ItemDetailsPopup
                 visible={detailsOpen}
                 item={selected}
@@ -274,74 +273,71 @@ export default function WalletItemsScreen() {
                 data={detailsData}
                 onClose={closeDetails}
             />
-
-
         </SafeAreaView>
     );
 }
 
-const ACCENT_BG = "#F3E8FF";
-const BORDER = "#E5E7EB";
-
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: "#FFFFFF", paddingHorizontal: 24 },
-    headerRow: {
-        paddingTop: 12,
-        paddingBottom: 12,
-        flexDirection: "row",
+    container: { flex: 1, backgroundColor: COLORS.bg, paddingHorizontal: 16, paddingBottom: 16 },
+
+    topBar: {
+        height: 48,
+        justifyContent: "center",
         alignItems: "center",
-        justifyContent: "space-between",
+        marginBottom: 12,
     },
-    headerTitle: { fontSize: 18, fontWeight: "600", color: "#111827" },
+    topLeft: { position: "absolute", left: 0, padding: 4 },
+    topRight: { position: "absolute", right: 0, padding: 4 },
+    topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
 
     searchBox: {
         flexDirection: "row",
         alignItems: "center",
-        gap: 8,
+        gap: 10,
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: COLORS.border,
         borderRadius: 999,
         paddingHorizontal: 12,
         paddingVertical: 10,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: COLORS.card,
     },
-    searchInput: { flex: 1, fontSize: 13, color: "#111827" },
+    searchInput: { flex: 1, fontSize: 13, color: COLORS.text },
 
     chipsRow: { flexDirection: "row", gap: 8, marginTop: 12 },
     chip: {
         paddingHorizontal: 10,
         paddingVertical: 6,
-        borderRadius: 10,
+        borderRadius: 999,
         borderWidth: 1,
-        borderColor: BORDER,
-        backgroundColor: "#FFFFFF",
+        borderColor: COLORS.borderSoft,
+        backgroundColor: COLORS.card,
     },
-    chipActive: { backgroundColor: ACCENT_BG, borderColor: "#D8B4FE" },
-    chipText: { fontSize: 12, color: "#374151", fontWeight: "500" },
-    chipTextActive: { color: "#111827" },
+    chipActive: { backgroundColor: COLORS.accentBg, borderColor: COLORS.accentBorder },
+    chipText: { fontSize: 12, color: COLORS.text, fontWeight: "700" },
+    chipTextActive: { color: COLORS.accentText },
 
     card: {
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: COLORS.border,
         borderRadius: 14,
         paddingHorizontal: 12,
         paddingVertical: 12,
         marginBottom: 10,
-        backgroundColor: "#FFFFFF",
+        backgroundColor: COLORS.card,
     },
     cardRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
     badge: {
-        backgroundColor: ACCENT_BG,
+        backgroundColor: COLORS.accentBg,
         borderRadius: 10,
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderWidth: 1,
-        borderColor: "#D8B4FE",
+        borderColor: COLORS.accentBorder,
     },
-    badgeText: { fontSize: 11, fontWeight: "700", color: "#111827" },
+    badgeText: { fontSize: 11, fontWeight: "600", color: COLORS.accentText },
 
-    cardTitle: { fontSize: 13, fontWeight: "700", color: "#111827" },
-    cardSub: { fontSize: 11, color: "#6B7280", marginTop: 2 },
+    cardTitle: { fontSize: 13, fontWeight: "600", color: COLORS.text },
+    cardSub: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
 
-    empty: { color: "#9CA3AF", marginTop: 14, textAlign: "center" },
+    empty: { color: COLORS.subtle, marginTop: 14, textAlign: "center" },
 });

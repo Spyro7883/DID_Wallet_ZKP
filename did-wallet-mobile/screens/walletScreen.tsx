@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
-    SafeAreaView,
     View,
     Text,
     StyleSheet,
@@ -9,13 +8,17 @@ import {
     Pressable,
     Alert,
     Platform,
+    StatusBar,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useRoute, useNavigation, RouteProp } from "@react-navigation/native";
 import type { RootStackParamList } from "../src/navigation/types";
 import { loadLastWallet, clearLastWallet } from "../src/storage/walletSession";
 import SettingsSheet from "./settings";
 import { ItemDetailsPopup } from "./itemDetailsPopup";
+import { COLORS } from "../src/theme/colors";
+import ConnectIssuerSheet from "./connectIssuer";
 
 type WalletRouteProp = RouteProp<RootStackParamList, "Wallet">;
 
@@ -51,6 +54,8 @@ export default function WalletScreen() {
     const [detailsError, setDetailsError] = useState("");
     const [detailsData, setDetailsData] = useState<any>(null);
 
+    const [connectOpen, setConnectOpen] = useState(false);
+
     useEffect(() => {
         let alive = true;
 
@@ -66,8 +71,7 @@ export default function WalletScreen() {
                     return;
                 }
 
-                if (sess.profileName !== effectiveProfile) setProfileName(sess.profileName);
-                else setProfileName(effectiveProfile);
+                setProfileName(effectiveProfile);
 
                 const resp = await fetch(`${BASE_URL}/wallets/summary`, {
                     method: "POST",
@@ -130,21 +134,15 @@ export default function WalletScreen() {
         };
 
         if (Platform.OS === "web") {
-            const ok = window.confirm(
-                "Log out?\nYou will need your wallet password to access this identity again."
-            );
+            const ok = window.confirm("Log out?\nYou will need your wallet password to access this identity again.");
             if (ok) run();
             return;
         }
 
-        Alert.alert(
-            "Log out?",
-            "You will need your wallet password to access this identity again.",
-            [
-                { text: "Cancel", style: "cancel" },
-                { text: "Log out", style: "destructive", onPress: run },
-            ]
-        );
+        Alert.alert("Log out?", "You will need your wallet password to access this identity again.", [
+            { text: "Cancel", style: "cancel" },
+            { text: "Log out", style: "destructive", onPress: run },
+        ]);
     };
 
     const openDetails = async (item: WalletItem) => {
@@ -184,21 +182,29 @@ export default function WalletScreen() {
         }
     };
 
-    return (
-        <SafeAreaView style={styles.container}>
-            <ScrollView contentContainerStyle={styles.content}>
-                <View style={styles.headerRow}>
-                    <Text style={styles.headerTitle}>Wallet: {profileName}</Text>
+    const TOP_PAD = Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) + 12 : 12;
 
-                    <Pressable hitSlop={8} onPress={() => setSettingsOpen(true)}>
-                        <MaterialIcons name="settings" size={22} color="#111827" />
+    return (
+        <SafeAreaView style={[styles.container, { paddingTop: TOP_PAD }]} edges={["top", "left", "right"]}>
+            <ScrollView contentContainerStyle={styles.content}>
+                <View style={styles.topBar}>
+                    <View style={{ width: 32 }} />
+                    <Text style={styles.topTitle}>Wallet</Text>
+                    <Pressable hitSlop={8} onPress={() => setSettingsOpen(true)} style={styles.iconBtn}>
+                        <MaterialIcons name="settings" size={22} color={COLORS.accentText} />
                     </Pressable>
                 </View>
+
+                <Text style={styles.subTitle} numberOfLines={1}>
+                    Wallet: {profileName}
+                </Text>
 
                 <View style={styles.identityCard}>
                     <Text style={styles.identityName}>{profileName}</Text>
                     <Text style={styles.identityLabel}>Active identity</Text>
-                    <Text style={styles.identityDid}>{activeDid}</Text>
+                    <Text style={styles.identityDid} numberOfLines={2} ellipsizeMode="middle">
+                        {activeDid}
+                    </Text>
 
                     <View style={styles.identityStatsRow}>
                         <Text style={styles.identityStat}>DIDs: {stats.dids}</Text>
@@ -211,17 +217,11 @@ export default function WalletScreen() {
                     style={styles.primaryButton}
                     onPress={() => navigation.navigate("WalletItems", { kind: "all" })}
                 >
-                    <Text style={styles.primaryButtonText}>Open Wallet Items</Text>
+                    <Text style={styles.primaryButtonText}>Open Wallet items</Text>
                 </Pressable>
 
                 <View style={styles.sectionHeader}>
                     <Text style={styles.sectionTitle}>{recentTitle}</Text>
-                    <Pressable
-                        onPress={() => navigation.navigate("WalletItems", { kind: "all" })}
-                        hitSlop={4}
-                    >
-                        <Text style={styles.sectionLink}>View All</Text>
-                    </Pressable>
                 </View>
 
                 {loading ? (
@@ -245,7 +245,7 @@ export default function WalletScreen() {
                                         <Text style={styles.itemTitle} numberOfLines={1}>
                                             {item.title}
                                         </Text>
-                                        <Text style={styles.itemSubtitle} numberOfLines={1}>
+                                        <Text style={styles.itemSubtitle} numberOfLines={1} ellipsizeMode="middle">
                                             {item.subject}
                                         </Text>
                                         <Text style={styles.itemSubtitle} numberOfLines={1}>
@@ -256,11 +256,7 @@ export default function WalletScreen() {
                             </Pressable>
                         ))}
 
-                        {!recentItems.length && (
-                            <Text style={{ color: "#9CA3AF", marginTop: 6 }}>
-                                No items yet.
-                            </Text>
-                        )}
+                        {!recentItems.length && <Text style={styles.empty}>No items yet.</Text>}
                     </View>
                 )}
             </ScrollView>
@@ -271,16 +267,15 @@ export default function WalletScreen() {
                 onCreateBackup={goCreateBackup}
                 onImportBackup={goImportBackup}
                 onLogout={doLogout}
-                onConnectIssuer={() => navigation.navigate("ConnectIssuer")}
+                onConnectIssuer={() => {
+                    setSettingsOpen(false);
+                    setTimeout(() => setConnectOpen(true), 50);
+                }}
             />
 
             <ItemDetailsPopup
                 visible={detailsOpen}
-                item={
-                    detailsItem
-                        ? { kind: detailsItem.kind, id: detailsItem.id, title: detailsItem.title }
-                        : null
-                }
+                item={detailsItem ? { kind: detailsItem.kind, id: detailsItem.id, title: detailsItem.title } : null}
                 loading={detailsLoading}
                 error={detailsError}
                 data={detailsData}
@@ -291,84 +286,95 @@ export default function WalletScreen() {
                     setDetailsData(null);
                 }}
             />
+            <ConnectIssuerSheet
+                visible={connectOpen}
+                onClose={() => setConnectOpen(false)}
+            />
         </SafeAreaView>
     );
 }
 
-const CARD_BG = "#F9FAFB";
-const ACCENT_BG = "#F3E8FF";
-const BORDER = "#E5E7EB";
-
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: "#FFFFFF" },
-    content: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 24 },
+    container: { flex: 1, backgroundColor: COLORS.bg },
+    content: { paddingHorizontal: 16, paddingBottom: 24 },
 
-    headerRow: {
+    topBar: {
+        height: 48,
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-        marginBottom: 16,
+        marginBottom: 8,
     },
-    headerTitle: { fontSize: 18, fontWeight: "600" },
+    topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
+
+    iconBtn: {
+        backgroundColor: COLORS.accentBg,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: COLORS.accentBorder,
+    },
+
+    subTitle: { color: COLORS.subtle, fontSize: 12, marginBottom: 10 },
 
     identityCard: {
-        backgroundColor: CARD_BG,
         borderRadius: 16,
         paddingHorizontal: 16,
         paddingVertical: 14,
         borderWidth: 1,
-        borderColor: BORDER,
-        marginBottom: 16,
+        borderColor: COLORS.border,
+        backgroundColor: COLORS.card,
+        marginBottom: 14,
     },
-    identityName: { fontSize: 16, fontWeight: "600", marginBottom: 4 },
-    identityLabel: { fontSize: 12, color: "#6B7280" },
-    identityDid: { fontSize: 12, color: "#4B5563", marginTop: 2, marginBottom: 8 },
-    identityStatsRow: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        marginTop: 4,
-    },
-    identityStat: { fontSize: 12, color: "#4B5563" },
+    identityName: { fontSize: 16, fontWeight: "600", color: COLORS.text, marginBottom: 4 },
+    identityLabel: { fontSize: 12, color: COLORS.muted },
+    identityDid: { fontSize: 12, color: COLORS.text, marginTop: 4, marginBottom: 10 },
+    identityStatsRow: { flexDirection: "row", justifyContent: "space-between" },
+    identityStat: { fontSize: 12, color: COLORS.muted },
 
     primaryButton: {
-        backgroundColor: ACCENT_BG,
-        borderRadius: 999,
+        backgroundColor: COLORS.accentBg,
+        borderRadius: 14,
         paddingVertical: 12,
         alignItems: "center",
-        marginBottom: 24,
+        borderWidth: 1,
+        borderColor: COLORS.accentBorder,
+        marginBottom: 18,
     },
-    primaryButtonText: { fontSize: 15, fontWeight: "500" },
+    primaryButtonText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
 
     sectionHeader: {
         flexDirection: "row",
-        justifyContent: "space-between",
         alignItems: "center",
-        marginBottom: 8,
+        marginBottom: 10,
     },
-    sectionTitle: { fontSize: 14, fontWeight: "600" },
-    sectionLink: { fontSize: 12, color: "#6366F1", fontWeight: "500" },
+    sectionTitle: { fontSize: 13, fontWeight: "600", color: COLORS.text },
+    sectionLink: { fontSize: 12, color: COLORS.link, fontWeight: "600" },
 
     itemsList: { gap: 10 },
 
     itemCard: {
-        backgroundColor: "#FFFFFF",
         borderRadius: 14,
         paddingHorizontal: 12,
         paddingVertical: 12,
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: COLORS.border,
+        backgroundColor: COLORS.card,
     },
     cardRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
     badge: {
-        backgroundColor: ACCENT_BG,
+        backgroundColor: COLORS.accentBg,
         borderRadius: 10,
         paddingHorizontal: 8,
         paddingVertical: 4,
         borderWidth: 1,
-        borderColor: "#D8B4FE",
+        borderColor: COLORS.accentBorder,
     },
-    badgeText: { fontSize: 11, fontWeight: "700", color: "#111827" },
+    badgeText: { fontSize: 11, fontWeight: "600", color: COLORS.accentText },
 
-    itemTitle: { fontSize: 13, fontWeight: "700", color: "#111827" },
-    itemSubtitle: { fontSize: 11, color: "#6B7280", marginTop: 2 },
+    itemTitle: { fontSize: 13, fontWeight: "600", color: COLORS.text },
+    itemSubtitle: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
+
+    empty: { color: COLORS.subtle, marginTop: 6 },
 });

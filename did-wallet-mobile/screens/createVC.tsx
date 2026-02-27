@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-    SafeAreaView,
     View,
     Text,
     TextInput,
@@ -10,22 +9,20 @@ import {
     Alert,
     Platform,
     ScrollView,
+    Modal,
+    FlatList,
+    StatusBar,
 } from "react-native";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
-import { loadLastWallet, saveLastVcRequest, loadLastVcRequest, clearLastVcRequest } from "../src/storage/walletSession";
+import { loadLastWallet, saveLastVcRequest, loadLastVcRequest } from "../src/storage/walletSession";
+
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
-type ClaimRow = { id: string; key: string; value: string };
-
 type VCType = "AgeCredential" | "CitizenshipCredential" | "IncomeCredential";
-
-type VcRequestStatus =
-    | "pending"
-    | "approved"
-    | "rejected"
-    | "unknown";
+type VcRequestStatus = "pending" | "approved" | "rejected" | "unknown";
 
 type VcRequestDetail = {
     id: number;
@@ -42,10 +39,7 @@ type VcRequestDetail = {
     issued: null | { vcHash: string; vcJwt: string | null };
 };
 
-const rid = () => Math.random().toString(16).slice(2) + Date.now().toString(16);
-
 const notify = (title: string, message: string) => {
-    console.log(`[${title}] ${message}`);
     if (Platform.OS === "web") {
         window.alert(`${title}\n\n${message}`);
     } else {
@@ -60,32 +54,6 @@ async function readJsonSafe(resp: Response) {
     } catch {
         return { json: null, text };
     }
-}
-
-function parseValue(v: string): any {
-    const s = v.trim();
-    if (/^(true|false)$/i.test(s)) return s.toLowerCase() === "true";
-    if (/^-?\d+(\.\d+)?$/.test(s)) return Number(s);
-    return v;
-}
-
-function buildClaims(rows: ClaimRow[]): { claims: Record<string, any>; error?: string } {
-    const out: Record<string, any> = {};
-    const seen = new Set<string>();
-
-    for (const r of rows) {
-        const k = r.key.trim();
-        if (!k) continue;
-
-        const kl = k.toLowerCase();
-        if (seen.has(kl)) return { claims: {}, error: `Duplicate field name: "${k}"` };
-        seen.add(kl);
-
-        out[k] = parseValue(r.value);
-    }
-
-    if (!Object.keys(out).length) return { claims: {}, error: "Add at least one claim field" };
-    return { claims: out };
 }
 
 function validateClaimsForType(t: VCType, claims: Record<string, any>) {
@@ -113,6 +81,12 @@ function validateClaimsForType(t: VCType, claims: Record<string, any>) {
     }
 }
 
+function short(s: string, head = 10, tail = 6) {
+    const v = String(s || "");
+    if (v.length <= head + tail + 3) return v;
+    return `${v.slice(0, head)}...${v.slice(-tail)}`;
+}
+
 export default function CreateCredentialScreen() {
     const navigation = useNavigation<any>();
 
@@ -120,39 +94,34 @@ export default function CreateCredentialScreen() {
     const [type, setType] = useState<VCType>("CitizenshipCredential");
     const [validDays, setValidDays] = useState("365");
 
-    const [claimRows, setClaimRows] = useState<ClaimRow[]>([
-        { id: rid(), key: "citizenship", value: "RO" },
-    ]);
-
-    const [loading, setLoading] = useState(false);
-    const canCreate = useMemo(() => !loading, [loading]);
-
-    const [imported, setImported] = useState(false);
+    const [citizenship, setCitizenship] = useState("RO");
+    const [dob, setDob] = useState("1999-01-01");
+    const [incomeMin, setIncomeMin] = useState("1000");
+    const [incomeMax, setIncomeMax] = useState("3000");
+    const [currency, setCurrency] = useState("RON");
 
     const [requestId, setRequestId] = useState<number | null>(null);
-    const [loadingStatus, setLoadingStatus] = useState(false);
-
     const [requests, setRequests] = useState<VcRequestDetail[]>([]);
     const [syncing, setSyncing] = useState(false);
+    const [loading, setLoading] = useState(false);
 
-    const importedReqIdsRef = useRef<Set<number>>(new Set());
+    const [reqModalOpen, setReqModalOpen] = useState(false);
+    const [reqFilter, setReqFilter] = useState<"pending" | "all">("pending");
+    const [detailsOpen, setDetailsOpen] = useState(false);
+
+    const [vcModalOpen, setVcModalOpen] = useState(false);
 
     const syncingRef = useRef(false);
+    const importedReqIdsRef = useRef<Set<number>>(new Set());
+
+    const pinnedReqIdRef = useRef<number | null>(null);
 
     const selectedReq = useMemo(
         () => (requestId ? requests.find((x) => x.id === requestId) ?? null : null),
-        [requests, requestId]
+        [requests, requestId],
     );
 
-    const DEFAULT_FIELDS: Record<VCType, { key: string; value: string }[]> = {
-        CitizenshipCredential: [{ key: "citizenship", value: "RO" }],
-        AgeCredential: [{ key: "dateOfBirth", value: "1999-01-01" }],
-        IncomeCredential: [
-            { key: "incomeMin", value: "1000" },
-            { key: "incomeMax", value: "3000" },
-            { key: "currency", value: "RON" },
-        ],
-    };
+    const pendingCount = useMemo(() => requests.filter((r) => r.status === "pending").length, [requests]);
 
     const TYPES: { label: string; value: VCType }[] = [
         { label: "Citizenship", value: "CitizenshipCredential" },
@@ -160,8 +129,16 @@ export default function CreateCredentialScreen() {
         { label: "Income", value: "IncomeCredential" },
     ];
 
+    const insets = useSafeAreaInsets();
+
     useEffect(() => {
-        setClaimRows(DEFAULT_FIELDS[type].map((f) => ({ id: rid(), ...f })));
+        if (type === "CitizenshipCredential") setCitizenship("RO");
+        if (type === "AgeCredential") setDob("1999-01-01");
+        if (type === "IncomeCredential") {
+            setIncomeMin("1000");
+            setIncomeMax("3000");
+            setCurrency("RON");
+        }
     }, [type]);
 
     useEffect(() => {
@@ -176,17 +153,12 @@ export default function CreateCredentialScreen() {
                     body: JSON.stringify({ profile: sess.profileName, passphrase: sess.passphrase, limit: 1 }),
                 });
                 const json = await resp.json();
-                if (resp.ok && json.ok && json.activeDid) setSubjectDid(String(json.activeDid));
+                if (resp.ok && json?.ok && json.activeDid) setSubjectDid(String(json.activeDid));
             } catch { }
         })();
     }, []);
 
-    const addRow = () => setClaimRows((p) => [...p, { id: rid(), key: "", value: "" }]);
-    const removeRow = (id: string) => setClaimRows((p) => p.filter((x) => x.id !== id));
-    const updateRow = (id: string, patch: Partial<ClaimRow>) =>
-        setClaimRows((p) => p.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-
-    async function importIssuedVc(vcJwt: string) {
+    const importIssuedVc = useCallback(async (vcJwt: string) => {
         const sess = await loadLastWallet();
         if (!sess?.profileName || !sess?.passphrase) throw new Error("missing_session");
         if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
@@ -200,13 +172,15 @@ export default function CreateCredentialScreen() {
                 vcJwt,
             }),
         });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok || !j?.ok) throw new Error(j?.error || j?.message || "save_vc_failed");
-    }
+
+        const { json, text } = await readJsonSafe(r);
+        if (!r.ok || !json?.ok) {
+            throw new Error((json && (json.error || json.message)) || text || "save_vc_failed");
+        }
+    }, []);
 
     const syncRequests = useCallback(async () => {
         if (syncingRef.current) return;
-
         syncingRef.current = true;
         setSyncing(true);
 
@@ -224,14 +198,16 @@ export default function CreateCredentialScreen() {
             if (!resp.ok) throw new Error((json && (json.error || json.message)) || text || `HTTP ${resp.status}`);
             if (!json?.ok || !Array.isArray(json.items)) throw new Error("bad_list_response");
 
-            const items: VcRequestDetail[] = json.items;
+            const items = json.items as VcRequestDetail[];
             setRequests(items);
+
+            const pendingId = items.find((x) => x.status === "pending")?.id ?? null;
 
             if (!requestId) {
                 const last = await loadLastVcRequest(sess.profileName).catch(() => null);
                 const fallback =
+                    pendingId ||
                     (last && items.find((x) => x.id === last)?.id) ||
-                    items.find((x) => x.status === "pending")?.id ||
                     items[0]?.id ||
                     null;
 
@@ -239,21 +215,33 @@ export default function CreateCredentialScreen() {
                     setRequestId(fallback);
                     await saveLastVcRequest(sess.profileName, fallback).catch(() => { });
                 }
+            } else {
+                const current = items.find((x) => x.id === requestId) || null;
+
+                if (!current) {
+                    if (pinnedReqIdRef.current === requestId) pinnedReqIdRef.current = null;
+
+                    const next = pendingId || items[0]?.id || null;
+                    if (next) {
+                        setRequestId(next);
+                        await saveLastVcRequest(sess.profileName, next).catch(() => { });
+                    }
+                } else {
+                    const isPinned = pinnedReqIdRef.current === requestId;
+                    if (!isPinned && current.status !== "pending" && pendingId && pendingId !== requestId) {
+                        setRequestId(pendingId);
+                        await saveLastVcRequest(sess.profileName, pendingId).catch(() => { });
+                    }
+                }
             }
 
-            let importedCount = 0;
             for (const r of items) {
                 if (r.status === "approved" && r.issued?.vcJwt) {
                     if (!importedReqIdsRef.current.has(r.id)) {
                         await importIssuedVc(r.issued.vcJwt);
                         importedReqIdsRef.current.add(r.id);
-                        importedCount++;
                     }
                 }
-            }
-
-            if (importedCount > 0) {
-                notify("Synced", `Imported ${importedCount} approved credential(s) into wallet.`);
             }
         } catch (e: any) {
             console.error("syncRequests error:", e);
@@ -263,84 +251,19 @@ export default function CreateCredentialScreen() {
         }
     }, [requestId, importIssuedVc]);
 
-    async function fetchRequestStatus(id: number) {
-        const sess = await loadLastWallet();
-        if (!sess?.holderToken) throw new Error("Missing holder token. Pair first.");
-        if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
-
-        setLoadingStatus(true);
-        try {
-            const resp = await fetch(`${BASE_URL}/vc/requests/${id}`, {
-                method: "GET",
-                headers: {
-                    Authorization: `Bearer ${sess.holderToken}`,
-                },
-            });
-            const { json, text } = await readJsonSafe(resp);
-            if (!resp.ok) throw new Error((json && (json.error || json.message)) || text || `HTTP ${resp.status}`);
-            if (!json?.ok) throw new Error(json?.error || json?.message || "status_failed");
-
-            const r = json.request as any;
-
-            const detail: VcRequestDetail = {
-                id: Number(r.id),
-                status: (String(r.status || "unknown") as VcRequestStatus) || "unknown",
-                holderDid: String(r.holderDid || ""),
-                subjectDid: String(r.subjectDid || ""),
-                vcType: String(r.vcType || ""),
-                claims: r.claims ?? {},
-                validityDays: r.validityDays ?? null,
-                createdAt: String(r.createdAt || ""),
-                decidedAt: r.decidedAt ? String(r.decidedAt) : null,
-                decidedBy: r.decidedBy ? String(r.decidedBy) : null,
-                decisionNote: r.decisionNote ? String(r.decisionNote) : null,
-                issued: r.issued
-                    ? {
-                        vcHash: String(r.issued.vcHash || ""),
-                        vcJwt: r.issued.vcJwt ? String(r.issued.vcJwt) : null,
-                    }
-                    : null,
-            };
-
-            if (!imported && detail.status === "approved" && detail.issued?.vcJwt) {
-                setImported(true);
-                try {
-                    await importIssuedVc(detail.issued.vcJwt);
-                    notify("Saved", "VC was saved into your wallet.");
-                } catch (e: any) {
-                    setImported(false);
-                    throw e;
-                }
-            }
-
-            if (detail.status !== "pending") {
-                const sess = await loadLastWallet();
-                if (sess?.profileName) await clearLastVcRequest(sess.profileName);
-            }
-        } finally {
-            setLoadingStatus(false);
-        }
-    }
-
     useFocusEffect(
         useCallback(() => {
             syncRequests();
-
-            const t = setInterval(() => {
-                syncRequests();
-            }, 4000);
-
+            const t = setInterval(syncRequests, 4000);
             return () => clearInterval(t);
-        }, [syncRequests])
+        }, [syncRequests]),
     );
 
-    const submitRequest = async () => {
-        console.log("submitRequest: start", { BASE_URL });
+    const submitRequest = useCallback(async () => {
         try {
             setLoading(true);
 
             const sess = await loadLastWallet();
-            console.log("submitRequest: session", sess);
             if (!sess?.profileName || !sess?.passphrase) {
                 notify("Auth", "No wallet session. Redirecting to Welcome.");
                 navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
@@ -349,17 +272,19 @@ export default function CreateCredentialScreen() {
             if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
 
             const holderToken = sess.holderToken;
-            if (!holderToken) throw new Error("Missing holderToken. Pair first (/connect/*).");
-
-            const { claims, error } = buildClaims(claimRows);
-            if (error) throw new Error(error);
-            validateClaimsForType(type, claims);
+            if (!holderToken) throw new Error("Missing holderToken. Pair first.");
 
             const days = Number(validDays || "0");
             if (!Number.isFinite(days) || days <= 0) throw new Error("validityDays must be > 0");
 
+            let claims: any = {};
+            if (type === "CitizenshipCredential") claims = { citizenship };
+            if (type === "AgeCredential") claims = { dateOfBirth: dob };
+            if (type === "IncomeCredential") claims = { incomeMin, incomeMax, currency };
+
+            validateClaimsForType(type, claims);
+
             const body = { type, validityDays: days, claims };
-            console.log("submitRequest: POST /vc/requests body", body);
 
             const resp = await fetch(`${BASE_URL}/vc/requests`, {
                 method: "POST",
@@ -371,109 +296,180 @@ export default function CreateCredentialScreen() {
             });
 
             const { json, text } = await readJsonSafe(resp);
-            console.log("submitRequest: response", { status: resp.status, ok: resp.ok, json, text });
-
-            if (!resp.ok) {
-                const msg =
-                    (json && (json.error || json.message)) ||
-                    text ||
-                    `HTTP ${resp.status}`;
-                throw new Error(msg);
+            if (!resp.ok || !json?.ok) {
+                throw new Error((json && (json.error || json.message)) || text || "request_failed");
             }
-
-            if (!json?.ok) throw new Error(json?.error || json?.message || "request_failed");
 
             const id = Number(json.request?.id);
             if (!Number.isFinite(id)) throw new Error("bad_request_id");
 
-            setRequestId(id);
-            setImported(false);
+            pinnedReqIdRef.current = null;
 
-            await saveLastVcRequest(sess.profileName, id);
+            setRequestId(id);
+            await saveLastVcRequest(sess.profileName, id).catch(() => { });
+            await syncRequests();
 
             notify("Request submitted", `Request #${id} is pending approval`);
         } catch (e: any) {
-            console.error("submitRequest: error", e);
+            console.error("submitRequest error:", e);
             notify("Error", e?.message || "Could not submit request");
         } finally {
             setLoading(false);
         }
-    };
+    }, [navigation, validDays, type, citizenship, dob, incomeMin, incomeMax, currency, syncRequests]);
 
     const statusLabel =
         selectedReq?.status === "approved"
-            ? "Approved"
+            ? "APPROVED"
             : selectedReq?.status === "rejected"
-                ? "Rejected"
+                ? "REJECTED"
                 : selectedReq?.status === "pending"
-                    ? "Pending"
+                    ? "PENDING"
                     : requestId
-                        ? "Pending"
+                        ? "UNKNOWN"
                         : "—";
 
+    const canSubmit = !loading;
+
+    const TOP_PAD =
+        Platform.OS === "android"
+            ? (StatusBar.currentHeight ?? 0) + 12
+            : 12;
+
     return (
-        <SafeAreaView style={styles.container}>
+        <SafeAreaView style={[styles.container, { paddingTop: TOP_PAD }]} >
             <ScrollView
                 contentContainerStyle={{ paddingBottom: 24 }}
                 keyboardShouldPersistTaps="handled"
                 keyboardDismissMode="on-drag"
             >
-                <Text style={styles.title}>Request VC</Text>
+                <View style={styles.topBar}>
+                    <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={styles.topLeft}>
+                        <MaterialIcons name="arrow-back" size={24} color="white" />
+                    </Pressable>
 
-                <View style={{ marginBottom: 12 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                        <Text style={{ color: "white", fontWeight: "800" }}>Your requests</Text>
+                    <Text style={styles.titleText}>Request VC</Text>
 
-                        <Pressable
-                            onPress={syncRequests}
-                            style={[styles.refreshBtn, syncing && { opacity: 0.6 }]}
-                            disabled={syncing}
-                        >
-                            {syncing ? (
-                                <ActivityIndicator />
-                            ) : (
-                                <>
-                                    <MaterialIcons name="sync" size={18} color="#111827" />
-                                    <Text style={styles.refreshText}>Sync</Text>
-                                </>
-                            )}
-                        </Pressable>
-                    </View>
+                    <Pressable onPress={() => setReqModalOpen(true)} style={[styles.smallBtn, styles.topRight]}>
+                        <Text style={styles.smallBtnText}>Requests ({pendingCount})</Text>
+                    </Pressable>
+                </View>
 
-                    <View style={{ marginTop: 10, gap: 8 }}>
-                        {(requests || []).slice(0, 10).map((r) => {
-                            const active = r.id === requestId;
-                            const st = r.status.toUpperCase();
-                            return (
+                <Modal
+                    visible={reqModalOpen}
+                    transparent
+                    animationType="fade"
+                    onRequestClose={() => setReqModalOpen(false)}
+                >
+                    <Pressable style={styles.backdrop} onPress={() => setReqModalOpen(false)} />
+                    <View style={styles.modalCard}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Requests</Text>
+                            <Pressable onPress={() => setReqModalOpen(false)}>
+                                <MaterialIcons name="close" size={22} color="#C7CDD6" />
+                            </Pressable>
+                        </View>
+
+                        <View style={{ flexDirection: "row", gap: 8, marginTop: 10, alignItems: "center" }}>
+                            <Pressable
+                                onPress={() => setReqFilter("pending")}
+                                style={[styles.chip, reqFilter === "pending" && styles.chipActive]}
+                            >
+                                <Text style={[styles.chipText, reqFilter === "pending" && styles.chipTextActive]}>
+                                    Pending
+                                </Text>
+                            </Pressable>
+
+                            <Pressable
+                                onPress={() => setReqFilter("all")}
+                                style={[styles.chip, reqFilter === "all" && styles.chipActive]}
+                            >
+                                <Text style={[styles.chipText, reqFilter === "all" && styles.chipTextActive]}>
+                                    All
+                                </Text>
+                            </Pressable>
+
+                            <View style={{ flex: 1 }} />
+
+                            <Pressable
+                                onPress={syncRequests}
+                                style={[styles.smallBtn, syncing && { opacity: 0.6 }]}
+                                disabled={syncing}
+                            >
+                                <Text style={styles.smallBtnText}>{syncing ? "Sync..." : "Sync"}</Text>
+                            </Pressable>
+                        </View>
+
+                        <FlatList
+                            style={{ marginTop: 12 }}
+                            data={requests.filter((r) => (reqFilter === "all" ? true : r.status === "pending"))}
+                            keyExtractor={(r) => String(r.id)}
+                            renderItem={({ item }) => (
                                 <Pressable
-                                    key={r.id}
                                     onPress={async () => {
-                                        setRequestId(r.id);
+                                        pinnedReqIdRef.current = item.id;
+
+                                        setRequestId(item.id);
+                                        setDetailsOpen(false);
+                                        setVcModalOpen(false);
+
                                         const sess = await loadLastWallet();
-                                        if (sess?.profileName) await saveLastVcRequest(sess.profileName, r.id).catch(() => { });
+                                        if (sess?.profileName) {
+                                            await saveLastVcRequest(sess.profileName, item.id).catch(() => { });
+                                        }
+
+                                        setReqModalOpen(false);
                                     }}
-                                    style={{
-                                        padding: 10,
-                                        borderRadius: 12,
-                                        borderWidth: 1,
-                                        borderColor: active ? "#D8B4FE" : "rgba(229,231,235,0.15)",
-                                        backgroundColor: active ? "rgba(243,232,255,0.15)" : "rgba(255,255,255,0.04)",
-                                    }}
+                                    style={[styles.reqRow, item.id === requestId && styles.reqRowActive]}
                                 >
-                                    <Text style={{ color: "white", fontWeight: "800" }}>
-                                        #{r.id} · {r.vcType} · {st}
-                                    </Text>
-                                    <Text style={{ color: "#C7CDD6", marginTop: 2, fontSize: 12 }}>
-                                        {r.createdAt?.slice(0, 19).replace("T", " ")}
+                                    <Text style={styles.reqRowTitle}>#{item.id} · {item.vcType}</Text>
+                                    <Text style={styles.reqRowSub}>
+                                        {String(item.status).toUpperCase()} · {String(item.createdAt || "").slice(0, 16).replace("T", " ")}
                                     </Text>
                                 </Pressable>
-                            );
-                        })}
-                        {requests.length === 0 ? (
-                            <Text style={{ color: "#9CA3AF", marginTop: 6 }}>No requests yet</Text>
-                        ) : null}
+                            )}
+                            ListEmptyComponent={<Text style={{ color: "#9CA3AF", marginTop: 10 }}>No requests</Text>}
+                        />
                     </View>
-                </View>
+                </Modal>
+
+                <Modal
+                    visible={vcModalOpen}
+                    transparent
+                    animationType="fade"
+                    onRequestClose={() => setVcModalOpen(false)}
+                >
+                    <Pressable style={styles.backdrop} onPress={() => setVcModalOpen(false)} />
+                    <View style={styles.vcModalCard}>
+                        <View style={styles.modalHeader}>
+                            <Text style={styles.modalTitle}>Issued VC</Text>
+                            <Pressable onPress={() => setVcModalOpen(false)}>
+                                <MaterialIcons name="close" size={22} color="#C7CDD6" />
+                            </Pressable>
+                        </View>
+
+                        <View style={{ marginTop: 10 }}>
+                            <Text style={styles.statusSub}>VC hash</Text>
+                            <Text style={[styles.mono, { marginTop: 6 }]} selectable>
+                                {selectedReq?.issued?.vcHash || ""}
+                            </Text>
+
+                            <View style={{ height: 12 }} />
+
+                            <Text style={styles.statusSub}>VC JWT</Text>
+                            <TextInput
+                                value={selectedReq?.issued?.vcJwt || ""}
+                                editable={false}
+                                multiline
+                                scrollEnabled
+                                selectTextOnFocus
+                                autoCorrect={false}
+                                autoCapitalize="none"
+                                style={[styles.input, styles.jwtBox]}
+                            />
+                        </View>
+                    </View>
+                </Modal>
 
                 <Text style={styles.label}>Your DID (subject = holder)</Text>
                 <TextInput
@@ -511,100 +507,138 @@ export default function CreateCredentialScreen() {
                     keyboardType="number-pad"
                 />
 
-                <View style={styles.claimsHeader}>
-                    <Text style={[styles.label, { marginTop: 0, marginBottom: 0 }]}>Claims</Text>
-                    <Pressable onPress={addRow} style={styles.addBtn}>
-                        <MaterialIcons name="add" size={18} color="#111827" />
-                        <Text style={styles.addBtnText}>Add field</Text>
-                    </Pressable>
-                </View>
+                <Text style={styles.label}>Claims</Text>
 
-                {claimRows.map((r, idx) => (
-                    <View key={r.id} style={styles.claimCard}>
-                        <View style={styles.claimCardHeader}>
-                            <Text style={styles.claimCardTitle}>Claim {idx + 1}</Text>
+                {type === "CitizenshipCredential" && (
+                    <TextInput
+                        value={citizenship}
+                        onChangeText={setCitizenship}
+                        placeholder="RO"
+                        placeholderTextColor="#6B7280"
+                        style={styles.input}
+                        autoCapitalize="characters"
+                    />
+                )}
 
-                            <Pressable onPress={() => removeRow(r.id)} hitSlop={10} style={styles.removeBtn}>
-                                <MaterialIcons name="close" size={18} color="#9CA3AF" />
-                            </Pressable>
-                        </View>
+                {type === "AgeCredential" && (
+                    <TextInput
+                        value={dob}
+                        onChangeText={setDob}
+                        placeholder="YYYY-MM-DD"
+                        placeholderTextColor="#6B7280"
+                        style={styles.input}
+                        autoCapitalize="none"
+                    />
+                )}
 
-                        <View style={styles.claimFields}>
-                            <TextInput
-                                value={r.key}
-                                onChangeText={(t) => updateRow(r.id, { key: t })}
-                                placeholder="Field name (e.g. citizenship)"
-                                placeholderTextColor="#6B7280"
-                                style={[styles.claimFieldInput, styles.claimFieldTop]}
-                                autoCapitalize="none"
-                            />
+                {type === "IncomeCredential" && (
+                    <>
+                        <TextInput
+                            value={incomeMin}
+                            onChangeText={setIncomeMin}
+                            placeholder="incomeMin"
+                            placeholderTextColor="#6B7280"
+                            style={styles.input}
+                            keyboardType="number-pad"
+                        />
+                        <View style={{ height: 8 }} />
+                        <TextInput
+                            value={incomeMax}
+                            onChangeText={setIncomeMax}
+                            placeholder="incomeMax"
+                            placeholderTextColor="#6B7280"
+                            style={styles.input}
+                            keyboardType="number-pad"
+                        />
+                        <View style={{ height: 8 }} />
+                        <TextInput
+                            value={currency}
+                            onChangeText={setCurrency}
+                            placeholder="RON"
+                            placeholderTextColor="#6B7280"
+                            style={styles.input}
+                            autoCapitalize="characters"
+                        />
+                    </>
+                )}
 
-                            <TextInput
-                                value={r.value}
-                                onChangeText={(t) => updateRow(r.id, { value: t })}
-                                placeholder="Value (e.g. RO, 22, true)"
-                                placeholderTextColor="#6B7280"
-                                style={styles.claimFieldInput}
-                            />
-                        </View>
-                    </View>
-                ))}
-
-                <View style={{ height: 8 }} />
+                <View style={{ height: 14 }} />
 
                 <Pressable
-                    disabled={!canCreate}
-                    onPressIn={() => console.log("PRESS IN")}
-                    onPress={() => { console.log("PRESS"); submitRequest(); }}
-                    style={[styles.primaryBtn, !canCreate && { opacity: 0.6 }]}
+                    disabled={!canSubmit}
+                    onPress={submitRequest}
+                    style={[styles.primaryBtn, !canSubmit && { opacity: 0.6 }]}
                 >
                     {loading ? <ActivityIndicator /> : <Text style={styles.primaryText}>Submit request</Text>}
                 </Pressable>
 
-                {requestId ? (
+                {requestId && selectedReq ? (
                     <View style={styles.statusCard}>
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.statusTitle}>Request #{requestId}</Text>
-                                <Text style={styles.statusSub}>
-                                    Status: <Text style={{ fontWeight: "800" }}>{statusLabel}</Text>
-                                </Text>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
+                            <View style={{ flex: 1, paddingRight: 10 }}>
+                                <Text style={styles.statusTitle}>#{selectedReq.id} · {statusLabel}</Text>
+                                <Text style={styles.statusSub}>{selectedReq.vcType}</Text>
+
+                                {selectedReq.status === "pending" ? (
+                                    <Text style={[styles.statusSub, { marginTop: 8 }]}>
+                                        Waiting for approval…
+                                    </Text>
+                                ) : null}
+
+                                {selectedReq.decisionNote ? (
+                                    <Text style={[styles.statusSub, { marginTop: 8 }]}>
+                                        Note: {selectedReq.decisionNote}
+                                    </Text>
+                                ) : null}
                             </View>
 
-                            <Pressable
-                                onPress={() => fetchRequestStatus(requestId).catch((e) => Alert.alert("Error", e?.message || "status_failed"))}
-                                style={styles.refreshBtn}
-                            >
-                                {loadingStatus ? (
-                                    <ActivityIndicator />
-                                ) : (
-                                    <>
-                                        <MaterialIcons name="refresh" size={18} color="#111827" />
-                                        <Text style={styles.refreshText}>Refresh</Text>
-                                    </>
-                                )}
-                            </Pressable>
+                            <View style={{ gap: 8 }}>
+                                <Pressable onPress={syncRequests} style={styles.smallBtn}>
+                                    <Text style={styles.smallBtnText}>Refresh</Text>
+                                </Pressable>
+
+                                {selectedReq.status === "approved" && selectedReq.issued?.vcJwt ? (
+                                    <Pressable onPress={() => setVcModalOpen(true)} style={styles.smallBtn}>
+                                        <Text style={styles.smallBtnText}>View VC</Text>
+                                    </Pressable>
+                                ) : null}
+                            </View>
                         </View>
 
-                        {selectedReq?.decisionNote ? (
-                            <Text style={styles.statusNote}>Note: {selectedReq.decisionNote}</Text>
-                        ) : null}
+                        {detailsOpen ? (
+                            <View style={{ marginTop: 12 }}>
+                                <View style={styles.kvRow}>
+                                    <Text style={styles.kvLabel}>Created</Text>
+                                    <Text style={styles.kvValue} numberOfLines={1} ellipsizeMode="tail">
+                                        {String(selectedReq.createdAt || "").slice(0, 19).replace("T", " ")}
+                                    </Text>
+                                </View>
 
-                        {selectedReq?.issued?.vcHash ? (
-                            <View style={{ marginTop: 10 }}>
-                                <Text style={styles.statusSub}>Issued VC hash:</Text>
-                                <Text style={styles.mono}>{selectedReq.issued.vcHash}</Text>
-
-                                {selectedReq.issued.vcJwt ? (
-                                    <>
-                                        <Text style={[styles.statusSub, { marginTop: 8 }]}>VC JWT:</Text>
-                                        <Text style={styles.monoSmall} numberOfLines={6}>
-                                            {selectedReq.issued.vcJwt}
+                                {selectedReq.decidedAt ? (
+                                    <View style={styles.kvRow}>
+                                        <Text style={styles.kvLabel}>Decided</Text>
+                                        <Text style={styles.kvValue} numberOfLines={1} ellipsizeMode="tail">
+                                            {String(selectedReq.decidedAt).slice(0, 19).replace("T", " ")}
                                         </Text>
-                                    </>
+                                    </View>
+                                ) : null}
+
+                                {selectedReq.issued?.vcHash ? (
+                                    <View style={styles.kvRow}>
+                                        <Text style={styles.kvLabel}>VC hash</Text>
+                                        <Text style={styles.kvValue} numberOfLines={1} ellipsizeMode="middle">
+                                            {short(selectedReq.issued.vcHash, 14, 10)}
+                                        </Text>
+                                    </View>
                                 ) : null}
                             </View>
                         ) : null}
+
+                        <Pressable onPress={() => setDetailsOpen((v) => !v)} style={{ marginTop: 12 }}>
+                            <Text style={{ color: "#D8B4FE", fontWeight: "600" }}>
+                                {detailsOpen ? "Hide details" : "Show details"}
+                            </Text>
+                        </Pressable>
                     </View>
                 ) : null}
 
@@ -616,20 +650,35 @@ export default function CreateCredentialScreen() {
     );
 }
 
-const BORDER = "#E5E7EB";
 const ACCENT_BG = "#F3E8FF";
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: "#0B0F14", padding: 24 },
-    title: { fontSize: 20, fontWeight: "700", color: "white", marginBottom: 18 },
+    container: {
+        flex: 1,
+        backgroundColor: "#0B0F14",
+        paddingHorizontal: 16,
+        paddingBottom: 16,
+    },
+
+    topBar: {
+        height: 48,
+        justifyContent: "center",
+        alignItems: "center",
+        marginBottom: 12,
+    },
+    topLeft: { position: "absolute", left: 0, padding: 4 },
+    topRight: { position: "absolute", right: 0 },
+
+    titleText: { color: "white", fontSize: 18, fontWeight: "600" },
+
     label: { fontSize: 12, color: "#C7CDD6", marginBottom: 6, marginTop: 10, letterSpacing: 0.2 },
 
     input: {
         borderWidth: 1,
-        borderColor: BORDER,
+        borderColor: "rgba(229,231,235,0.15)",
         borderRadius: 12,
         paddingHorizontal: 12,
-        paddingVertical: 9,
+        paddingVertical: 10,
         color: "white",
         backgroundColor: "rgba(255,255,255,0.06)",
         fontSize: 14,
@@ -644,87 +693,9 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
         borderRadius: 999,
     },
-    typePillActive: {
-        backgroundColor: ACCENT_BG,
-        borderColor: "#D8B4FE",
-    },
-    typeText: { color: "white", fontWeight: "600", fontSize: 12 },
+    typePillActive: { backgroundColor: ACCENT_BG, borderColor: "#D8B4FE" },
+    typeText: { color: "white", fontWeight: "700", fontSize: 12 },
     typeTextActive: { color: "#111827" },
-
-    claimsHeader: {
-        marginTop: 12,
-        marginBottom: 10,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-    addBtn: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 6,
-        backgroundColor: ACCENT_BG,
-        borderRadius: 999,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderWidth: 1,
-        borderColor: "#D8B4FE",
-    },
-    addBtnText: { color: "#111827", fontWeight: "700", fontSize: 12 },
-
-    claimCard: {
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.15)",
-        borderRadius: 14,
-        padding: 12,
-        marginBottom: 12,
-        backgroundColor: "rgba(255,255,255,0.04)",
-    },
-
-    claimCardHeader: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: 10,
-    },
-
-    claimCardTitle: {
-        color: "#C7CDD6",
-        fontSize: 12,
-        fontWeight: "600",
-        letterSpacing: 0.2,
-    },
-
-    claimFields: {
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.15)",
-        borderRadius: 12,
-        overflow: "hidden",
-        backgroundColor: "rgba(255,255,255,0.06)",
-    },
-
-    claimFieldInput: {
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        color: "white",
-        fontSize: 14,
-        ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
-    },
-
-    claimFieldTop: {
-        borderBottomWidth: 1,
-        borderBottomColor: "rgba(229,231,235,0.12)",
-    },
-
-    removeBtn: {
-        width: 30,
-        height: 30,
-        borderRadius: 10,
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: "rgba(255,255,255,0.06)",
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.12)",
-    },
 
     primaryBtn: {
         backgroundColor: ACCENT_BG,
@@ -734,7 +705,29 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: "#D8B4FE",
     },
-    primaryText: { fontSize: 14, fontWeight: "700", color: "#111827" },
+    primaryText: { fontSize: 14, fontWeight: "600", color: "#111827" },
+
+    secondaryBtn: {
+        marginTop: 12,
+        borderRadius: 14,
+        paddingVertical: 12,
+        alignItems: "center",
+        borderWidth: 1,
+        borderColor: "rgba(229,231,235,0.2)",
+        backgroundColor: "rgba(255,255,255,0.04)",
+    },
+    secondaryText: { color: "white", fontWeight: "700" },
+
+    smallBtn: {
+        backgroundColor: ACCENT_BG,
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: "#D8B4FE",
+        alignSelf: "flex-end",
+    },
+    smallBtnText: { color: "#111827", fontWeight: "600", fontSize: 12 },
 
     statusCard: {
         marginTop: 14,
@@ -744,39 +737,86 @@ const styles = StyleSheet.create({
         padding: 12,
         backgroundColor: "rgba(255,255,255,0.04)",
     },
-    statusTitle: { color: "white", fontWeight: "800", fontSize: 14 },
+    statusTitle: { color: "white", fontWeight: "600", fontSize: 14 },
     statusSub: { color: "#C7CDD6", marginTop: 4, fontSize: 12 },
-    statusNote: { color: "#C7CDD6", marginTop: 8, fontSize: 12 },
 
-    refreshBtn: {
+    mono: { color: "white", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12 },
+
+    kvRow: {
         flexDirection: "row",
+        justifyContent: "space-between",
         alignItems: "center",
-        gap: 6,
-        backgroundColor: ACCENT_BG,
-        borderRadius: 999,
-        paddingHorizontal: 10,
         paddingVertical: 6,
-        borderWidth: 1,
-        borderColor: "#D8B4FE",
+        borderTopWidth: 1,
+        borderTopColor: "rgba(229,231,235,0.08)",
     },
-    refreshText: { color: "#111827", fontWeight: "800", fontSize: 12 },
-
-    mono: { color: "white", marginTop: 4, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
-    monoSmall: {
+    kvLabel: { color: "#9CA3AF", fontSize: 12, fontWeight: "800" },
+    kvValue: {
+        flex: 1,
+        marginLeft: 12,
         color: "white",
-        marginTop: 4,
         fontSize: 12,
+        textAlign: "right",
         fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     },
 
-    secondaryBtn: {
-        marginTop: 10,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
+    backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
+    modalCard: {
+        position: "absolute",
+        left: 16,
+        right: 16,
+        top: 80,
+        bottom: 80,
+        backgroundColor: "#0B0F14",
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: "rgba(229,231,235,0.15)",
+        padding: 12,
+    },
+    modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+    modalTitle: { color: "white", fontWeight: "600", fontSize: 16 },
+
+    chip: {
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 999,
         borderWidth: 1,
         borderColor: "rgba(229,231,235,0.2)",
         backgroundColor: "rgba(255,255,255,0.04)",
     },
-    secondaryText: { color: "white", fontWeight: "600" },
+    chipActive: { backgroundColor: ACCENT_BG, borderColor: "#D8B4FE" },
+    chipText: { color: "white", fontWeight: "800", fontSize: 12 },
+    chipTextActive: { color: "#111827" },
+
+    reqRow: {
+        padding: 10,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: "rgba(229,231,235,0.15)",
+        backgroundColor: "rgba(255,255,255,0.04)",
+        marginBottom: 8,
+    },
+    reqRowActive: { borderColor: "#D8B4FE", backgroundColor: "rgba(243,232,255,0.12)" },
+    reqRowTitle: { color: "white", fontWeight: "600" },
+    reqRowSub: { color: "#9CA3AF", marginTop: 2, fontSize: 12 },
+
+    vcModalCard: {
+        position: "absolute",
+        left: 16,
+        right: 16,
+        top: 90,
+        bottom: 90,
+        backgroundColor: "#0B0F14",
+        borderRadius: 16,
+        borderWidth: 1,
+        borderColor: "rgba(229,231,235,0.15)",
+        padding: 12,
+    },
+    jwtBox: {
+        fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+        fontSize: 12,
+        minHeight: 160,
+        maxHeight: 260,
+        textAlignVertical: "top",
+    },
 });

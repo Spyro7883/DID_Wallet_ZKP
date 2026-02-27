@@ -1,6 +1,17 @@
-import React, { useEffect, useRef, useState } from "react";
-import { Modal, View, Text, Pressable, StyleSheet, Animated, Easing } from "react-native";
+import React, { useEffect, useRef, useState, useMemo } from "react";
+import {
+    Modal,
+    View,
+    Text,
+    Pressable,
+    StyleSheet,
+    Animated,
+    Easing,
+    Platform,
+    useColorScheme,
+} from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
+import { COLORS } from "../src/theme/colors";
 
 type Props = {
     visible: boolean;
@@ -16,43 +27,77 @@ function SheetItem({
     icon,
     onPress,
     showChevron = true,
+    destructive = false,
+    iconColor,
+    chevronColor,
+    titleColor,
+    subColor,
 }: {
     title: string;
     subtitle: string;
     icon: keyof typeof MaterialIcons.glyphMap;
     onPress: () => void;
     showChevron?: boolean;
+    destructive?: boolean;
+    iconColor: string;
+    chevronColor: string;
+    titleColor: string;
+    subColor: string;
 }) {
     return (
-        <Pressable
-            onPress={onPress}
-            style={({ pressed }) => [styles.item, pressed && { opacity: 0.85 }]}
-        >
+        <Pressable onPress={onPress} style={({ pressed }) => [styles.item, pressed && { opacity: 0.85 }]}>
             <View style={styles.itemLeft}>
-                <MaterialIcons name={icon} size={22} color="#111827" />
+                <MaterialIcons name={icon} size={22} color={destructive ? "#F87171" : iconColor} />
             </View>
 
             <View style={{ flex: 1 }}>
-                <Text style={styles.itemTitle}>{title}</Text>
-                <Text style={styles.itemSub}>{subtitle}</Text>
+                <Text style={[styles.itemTitle, { color: destructive ? "#F87171" : titleColor }]}>{title}</Text>
+                <Text style={[styles.itemSub, { color: subColor }]}>{subtitle}</Text>
             </View>
 
-            {showChevron ? (
-                <MaterialIcons name="chevron-right" size={24} color="#6B7280" />
-            ) : null}
+            {showChevron ? <MaterialIcons name="chevron-right" size={24} color={chevronColor} /> : null}
         </Pressable>
     );
 }
 
-export default function CreateItemSheet({
-    visible,
-    onClose,
-    onCreateDid,
-    onCreateVc,
-    onCreateVp,
-}: Props) {
+export default function CreateItemSheet({ visible, onClose, onCreateDid, onCreateVc, onCreateVp }: Props) {
     const translateY = useRef(new Animated.Value(420)).current;
     const [mounted, setMounted] = useState(visible);
+
+    const scheme = useColorScheme();
+    const isDark = scheme === "dark";
+
+    const theme = useMemo(() => {
+        return isDark
+            ? {
+                overlay: "rgba(0,0,0,0.55)",
+                sheetBg: COLORS.bg,
+                sheetBorder: COLORS.border,
+                handle: "rgba(255,255,255,0.35)",
+                title: COLORS.text,
+                cardBg: COLORS.card,
+                cardBorder: COLORS.border,
+                divider: "rgba(229,231,235,0.10)",
+                icon: COLORS.text,
+                chevron: COLORS.subtle,
+                itemTitle: COLORS.text,
+                itemSub: COLORS.muted,
+            }
+            : {
+                overlay: "rgba(0,0,0,0.35)",
+                sheetBg: "#FFFFFF",
+                sheetBorder: "rgba(17,24,39,0.08)",
+                handle: "rgba(17,24,39,0.25)",
+                title: "#111827",
+                cardBg: COLORS.accentBg,
+                cardBorder: "rgba(17,24,39,0.08)",
+                divider: "rgba(17,24,39,0.08)",
+                icon: "#111827",
+                chevron: "#6B7280",
+                itemTitle: "#111827",
+                itemSub: "#4B5563",
+            };
+    }, [isDark]);
 
     useEffect(() => {
         if (visible) {
@@ -79,72 +124,119 @@ export default function CreateItemSheet({
 
     return (
         <Modal transparent visible={mounted} animationType="none" onRequestClose={onClose}>
-            <Pressable style={styles.overlay} onPress={onClose} />
+            <Pressable style={[styles.overlay, { backgroundColor: theme.overlay }]} onPress={onClose} />
 
-            <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-                <View style={styles.handle} />
-                <Text style={styles.title}>Choose what to create</Text>
+            <Animated.View
+                style={[
+                    styles.sheet,
+                    {
+                        transform: [{ translateY }],
+                        backgroundColor: theme.sheetBg,
+                        borderColor: theme.sheetBorder,
+                    },
+                ]}
+            >
+                <View style={[styles.handle, { backgroundColor: theme.handle }]} />
 
-                <View style={styles.card}>
+                <Text style={[styles.title, { color: theme.title }]}>Choose what to create</Text>
+
+                <View style={[styles.card, { backgroundColor: theme.cardBg, borderColor: theme.cardBorder }]}>
                     <SheetItem
                         title="New DID"
                         subtitle="Create a new decentralized identifier"
                         icon="badge"
-                        onPress={onCreateDid}
+                        onPress={() => {
+                            onClose();
+                            onCreateDid();
+                        }}
+                        iconColor={theme.icon}
+                        chevronColor={theme.chevron}
+                        titleColor={theme.itemTitle}
+                        subColor={theme.itemSub}
                     />
-                    <View style={styles.divider} />
+
+                    <View style={[styles.divider, { backgroundColor: theme.divider }]} />
+
                     <SheetItem
                         title="New Credential"
                         subtitle="Issue or import a verifiable credential"
                         icon="verified"
-                        onPress={onCreateVc}
+                        onPress={() => {
+                            onClose();
+                            onCreateVc();
+                        }}
+                        iconColor={theme.icon}
+                        chevronColor={theme.chevron}
+                        titleColor={theme.itemTitle}
+                        subColor={theme.itemSub}
                     />
-                    <View style={styles.divider} />
+
+                    <View style={[styles.divider, { backgroundColor: theme.divider }]} />
+
                     <SheetItem
                         title="New Presentation"
                         subtitle="Create a verifiable presentation (ZKP)"
                         icon="assignment"
-                        onPress={onCreateVp}
+                        onPress={() => {
+                            onClose();
+                            onCreateVp();
+                        }}
+                        iconColor={theme.icon}
+                        chevronColor={theme.chevron}
+                        titleColor={theme.itemTitle}
+                        subColor={theme.itemSub}
                     />
                 </View>
+
+                <View style={{ height: Platform.OS === "ios" ? 8 : 0 }} />
             </Animated.View>
         </Modal>
     );
 }
 
 const styles = StyleSheet.create({
-    overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.35)" },
+    overlay: { ...StyleSheet.absoluteFillObject },
+
     sheet: {
         position: "absolute",
         left: 0,
         right: 0,
         bottom: 0,
         zIndex: 2,
-        backgroundColor: "#FFFFFF",
         borderTopLeftRadius: 22,
         borderTopRightRadius: 22,
         paddingTop: 10,
         paddingHorizontal: 16,
         paddingBottom: 18,
+        borderWidth: 1,
     },
+
     handle: {
         alignSelf: "center",
         width: 56,
         height: 5,
         borderRadius: 999,
-        backgroundColor: "#111827",
-        opacity: 0.25,
         marginBottom: 12,
     },
-    title: { fontSize: 18, fontWeight: "600", marginBottom: 12, color: "#111827" },
+
+    title: { fontSize: 18, fontWeight: "600", marginBottom: 12 },
+
     card: {
         borderRadius: 16,
-        backgroundColor: "#F3E8FF",
         overflow: "hidden",
+        borderWidth: 1,
     },
-    divider: { height: 1, backgroundColor: "rgba(17,24,39,0.08)" },
-    item: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 14 },
+
+    divider: { height: 1 },
+
+    item: {
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+    },
     itemLeft: { width: 32, alignItems: "center", marginRight: 10 },
-    itemTitle: { fontSize: 16, fontWeight: "600", color: "#111827" },
-    itemSub: { marginTop: 3, fontSize: 13, color: "#4B5563" },
+
+    itemTitle: { fontSize: 16, fontWeight: "600" },
+    itemSub: { marginTop: 3, fontSize: 13 },
 });

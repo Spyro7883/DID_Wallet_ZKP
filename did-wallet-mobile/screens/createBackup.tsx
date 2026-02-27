@@ -1,6 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 import {
-    SafeAreaView,
     View,
     Text,
     StyleSheet,
@@ -11,15 +10,19 @@ import {
     Alert,
     Modal,
     Platform,
+    StatusBar,
+    Animated,
+    Easing,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import * as FileSystem from "expo-file-system/legacy";
-
 import * as Sharing from "expo-sharing";
 
 import { loadLastWallet } from "../src/storage/walletSession";
 import { ensureBackupsDir } from "../src/storage/backups";
+import { COLORS } from "../src/theme/colors";
 
 type Summary = {
     activeDid: string | null;
@@ -28,10 +31,7 @@ type Summary = {
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
-const CARD_BG = "#F9FAFB";
-const ACCENT_BG = "#F3E8FF";
-
-function shortDid(did: string, left = 12, right = 6) {
+function shortDid(did: string, left = 16, right = 10) {
     if (!did) return "";
     if (did.length <= left + right + 3) return did;
     return `${did.slice(0, left)}...${did.slice(-right)}`;
@@ -48,6 +48,30 @@ function SuccessSheet({
     fileUri: string | null;
     onClose: () => void;
 }) {
+    const translateY = useRef(new Animated.Value(420)).current;
+    const [mounted, setMounted] = useState(visible);
+
+    useEffect(() => {
+        if (visible) {
+            setMounted(true);
+            Animated.timing(translateY, {
+                toValue: 0,
+                duration: 220,
+                easing: Easing.out(Easing.cubic),
+                useNativeDriver: true,
+            }).start();
+        } else if (mounted) {
+            Animated.timing(translateY, {
+                toValue: 420,
+                duration: 180,
+                easing: Easing.in(Easing.cubic),
+                useNativeDriver: true,
+            }).start(({ finished }) => {
+                if (finished) setMounted(false);
+            });
+        }
+    }, [visible, mounted, translateY]);
+
     const canShare = !!fileUri;
 
     const onShare = async () => {
@@ -68,32 +92,35 @@ function SuccessSheet({
         }
     };
 
+    if (!mounted) return null;
+
     return (
-        <Modal transparent visible={visible} animationType="fade" onRequestClose={onClose}>
+        <Modal transparent visible={mounted} animationType="none" onRequestClose={onClose}>
             <Pressable style={styles.sheetOverlay} onPress={onClose} />
-            <View style={styles.sheetWrap}>
-                <View style={styles.sheet}>
-                    <View style={styles.sheetHandle} />
-                    <Text style={styles.sheetTitle}>Backup created</Text>
-                    <Text style={styles.sheetSub}>{filename}</Text>
 
-                    <View style={{ height: 14 }} />
+            <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
+                <View style={styles.sheetHandle} />
+                <Text style={styles.sheetTitle}>Backup created</Text>
+                <Text style={styles.sheetSub} numberOfLines={1} ellipsizeMode="middle">
+                    {filename}
+                </Text>
 
-                    <Pressable
-                        style={[styles.sheetBtn, !canShare && { opacity: 0.5 }]}
-                        onPress={onShare}
-                        disabled={!canShare}
-                    >
-                        <MaterialIcons name="share" size={18} color="#111827" />
-                        <Text style={styles.sheetBtnText}>Share</Text>
-                    </Pressable>
+                <View style={{ height: 14 }} />
 
-                    <Pressable style={[styles.sheetBtn, { marginTop: 10 }]} onPress={onClose}>
-                        <MaterialIcons name="check" size={18} color="#111827" />
-                        <Text style={styles.sheetBtnText}>Done</Text>
-                    </Pressable>
-                </View>
-            </View>
+                <Pressable
+                    style={[styles.sheetBtn, !canShare && { opacity: 0.5 }]}
+                    onPress={onShare}
+                    disabled={!canShare}
+                >
+                    <MaterialIcons name="share" size={18} color={COLORS.accentText} />
+                    <Text style={styles.sheetBtnText}>Share</Text>
+                </Pressable>
+
+                <Pressable style={[styles.sheetBtn, { marginTop: 10 }]} onPress={onClose}>
+                    <MaterialIcons name="check" size={18} color={COLORS.accentText} />
+                    <Text style={styles.sheetBtnText}>Done</Text>
+                </Pressable>
+            </Animated.View>
         </Modal>
     );
 }
@@ -184,7 +211,6 @@ export default function BackupScreen() {
 
     const createBackup = async () => {
         setSubmitAttempted(true);
-
         if (!canCreate) return;
 
         try {
@@ -213,7 +239,6 @@ export default function BackupScreen() {
             const contentB64: string = json.contentB64;
             if (!contentB64) throw new Error("backup_missing_content");
 
-            // ✅ WEB: descarcă fișierul în Downloads
             if (Platform.OS === "web") {
                 const bin = atob(contentB64);
                 const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
@@ -224,7 +249,6 @@ export default function BackupScreen() {
                 a.href = url;
                 a.download = filename;
                 a.click();
-
                 URL.revokeObjectURL(url);
 
                 setCreatedFilename(filename);
@@ -233,23 +257,17 @@ export default function BackupScreen() {
                 return;
             }
 
-            // ✅ ANDROID/iOS: salvează în folderul backups/ (ca să fie listat la Import)
             const backupsDir = await ensureBackupsDir();
             if (!backupsDir) throw new Error("backups_dir_unavailable");
 
-            // (opțional) sanitize nume fișier
             const safeFilename = filename.replace(/[\\/:*?"<>|]/g, "_");
-
             const outUri = `${backupsDir}${safeFilename}`;
-            await FileSystem.writeAsStringAsync(outUri, contentB64, {
-                encoding: "base64",
-            });
+
+            await FileSystem.writeAsStringAsync(outUri, contentB64, { encoding: "base64" });
 
             setCreatedFilename(filename);
             setCreatedFileUri(outUri);
             setSuccessOpen(true);
-
-
         } catch (e: any) {
             Alert.alert("Error", e?.message || "Could not create backup");
         } finally {
@@ -259,19 +277,19 @@ export default function BackupScreen() {
 
     const showMismatch = !useWalletPassword && (touchedConfirm || submitAttempted) && mismatch;
 
+    const TOP_PAD = Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) + 12 : 12;
+
     return (
-        <SafeAreaView style={styles.container}>
-            <ScrollView contentContainerStyle={styles.content}>
-                {/* Header */}
-                <View style={styles.headerRow}>
-                    <Pressable hitSlop={10} onPress={() => navigation.goBack()}>
-                        <MaterialIcons name="arrow-back" size={22} color="#111827" />
+        <SafeAreaView style={[styles.container, { paddingTop: TOP_PAD }]} edges={["top", "left", "right"]}>
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+                <View style={styles.topBar}>
+                    <Pressable hitSlop={10} onPress={() => navigation.goBack()} style={styles.topLeft}>
+                        <MaterialIcons name="arrow-back" size={24} color={COLORS.text} />
                     </Pressable>
 
-                    <Text style={styles.headerTitle}>Backup wallet</Text>
+                    <Text style={styles.topTitle}>Backup wallet</Text>
 
-                    {/* right placeholder to keep title centered */}
-                    <View style={{ width: 22 }} />
+                    <View style={styles.topRight} />
                 </View>
 
                 <Text style={styles.subtitle}>Backup will be encrypted and saved on this device</Text>
@@ -282,11 +300,10 @@ export default function BackupScreen() {
                     </View>
                 ) : (
                     <>
-                        {/* Identity card */}
                         <View style={styles.identityCard}>
                             <Text style={styles.identityName}>{profileName}</Text>
                             <Text style={styles.identityLabel}>Active identity</Text>
-                            <Text style={styles.identityDid}>
+                            <Text style={styles.identityDid} numberOfLines={2} ellipsizeMode="middle">
                                 {summary.activeDid ? shortDid(summary.activeDid) : "No DID yet"}
                             </Text>
 
@@ -297,7 +314,6 @@ export default function BackupScreen() {
                             </View>
                         </View>
 
-                        {/* Encryption */}
                         <Text style={styles.sectionTitle}>Encryption</Text>
 
                         <Pressable
@@ -311,7 +327,7 @@ export default function BackupScreen() {
                             <MaterialIcons
                                 name={useWalletPassword ? "radio-button-checked" : "radio-button-unchecked"}
                                 size={20}
-                                color={useWalletPassword ? "#6D28D9" : "#111827"}
+                                color={useWalletPassword ? COLORS.accentBorder : COLORS.muted}
                             />
                             <Text style={styles.radioText}>Use wallet password (recommended)</Text>
                         </Pressable>
@@ -327,12 +343,11 @@ export default function BackupScreen() {
                             <MaterialIcons
                                 name={!useWalletPassword ? "radio-button-checked" : "radio-button-unchecked"}
                                 size={20}
-                                color={!useWalletPassword ? "#6D28D9" : "#111827"}
+                                color={!useWalletPassword ? COLORS.accentBorder : COLORS.muted}
                             />
                             <Text style={styles.radioText}>Use different backup password</Text>
                         </Pressable>
 
-                        {/* Conditional password fields */}
                         {!useWalletPassword && (
                             <View style={{ marginTop: 10 }}>
                                 <View style={styles.inputWrap}>
@@ -340,14 +355,19 @@ export default function BackupScreen() {
                                     <View style={styles.inputRow}>
                                         <TextInput
                                             value={backupPass}
-                                            onChangeText={(t) => setBackupPass(t)}
+                                            onChangeText={setBackupPass}
                                             placeholder="Enter backup password"
+                                            placeholderTextColor={COLORS.subtle}
                                             secureTextEntry={!showPass1}
                                             autoCapitalize="none"
                                             style={styles.input}
                                         />
                                         <Pressable hitSlop={10} onPress={() => setShowPass1((v) => !v)}>
-                                            <MaterialIcons name={showPass1 ? "visibility-off" : "visibility"} size={20} color="#6B7280" />
+                                            <MaterialIcons
+                                                name={showPass1 ? "visibility-off" : "visibility"}
+                                                size={20}
+                                                color={COLORS.subtle}
+                                            />
                                         </Pressable>
                                     </View>
                                 </View>
@@ -357,29 +377,30 @@ export default function BackupScreen() {
                                     <View style={styles.inputRow}>
                                         <TextInput
                                             value={backupPass2}
-                                            onChangeText={(t) => setBackupPass2(t)}
+                                            onChangeText={setBackupPass2}
                                             onBlur={() => setTouchedConfirm(true)}
                                             placeholder="Confirm backup password"
+                                            placeholderTextColor={COLORS.subtle}
                                             secureTextEntry={!showPass2}
                                             autoCapitalize="none"
                                             style={styles.input}
                                         />
                                         <Pressable hitSlop={10} onPress={() => setShowPass2((v) => !v)}>
-                                            <MaterialIcons name={showPass2 ? "visibility-off" : "visibility"} size={20} color="#6B7280" />
+                                            <MaterialIcons
+                                                name={showPass2 ? "visibility-off" : "visibility"}
+                                                size={20}
+                                                color={COLORS.subtle}
+                                            />
                                         </Pressable>
                                     </View>
                                 </View>
 
-                                {showMismatch && <Text style={styles.errorText}>Passwords don&apos;t match</Text>}
+                                {showMismatch ? <Text style={styles.errorText}>Passwords don&apos;t match</Text> : null}
                             </View>
                         )}
 
-                        {/* CTA */}
                         <Pressable
-                            style={[
-                                styles.primaryButton,
-                                (!canCreate || creating) && { opacity: 0.55 },
-                            ]}
+                            style={[styles.primaryButton, (!canCreate || creating) && { opacity: 0.55 }]}
                             onPress={createBackup}
                             disabled={!canCreate || creating}
                         >
@@ -411,101 +432,105 @@ export default function BackupScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: "#FFFFFF" },
-    content: { paddingHorizontal: 24, paddingTop: 12, paddingBottom: 24 },
+    container: { flex: 1, backgroundColor: COLORS.bg },
+    content: { paddingHorizontal: 16, paddingBottom: 24 },
 
-    headerRow: {
-        flexDirection: "row",
+    topBar: {
+        height: 48,
+        justifyContent: "center",
         alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: 10,
+        marginBottom: 8,
     },
-    headerTitle: { fontSize: 18, fontWeight: "600", color: "#111827" },
-    subtitle: { fontSize: 12, color: "#6B7280", marginBottom: 14 },
+    topLeft: { position: "absolute", left: 0, padding: 4 },
+    topRight: { position: "absolute", right: 0, width: 28, height: 28 },
+    topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
+
+    subtitle: { fontSize: 12, color: COLORS.subtle, marginBottom: 14 },
 
     identityCard: {
-        backgroundColor: CARD_BG,
         borderRadius: 16,
         paddingHorizontal: 16,
         paddingVertical: 14,
         borderWidth: 1,
-        borderColor: "#E5E7EB",
+        borderColor: COLORS.border,
+        backgroundColor: COLORS.card,
         marginBottom: 16,
     },
-    identityName: { fontSize: 16, fontWeight: "600", marginBottom: 4, color: "#111827" },
-    identityLabel: { fontSize: 12, color: "#6B7280" },
-    identityDid: { fontSize: 12, color: "#4B5563", marginTop: 2, marginBottom: 8 },
-    identityStatsRow: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        marginTop: 4,
-    },
-    identityStat: { fontSize: 12, color: "#4B5563" },
+    identityName: { fontSize: 16, fontWeight: "600", marginBottom: 4, color: COLORS.text },
+    identityLabel: { fontSize: 12, color: COLORS.muted },
+    identityDid: { fontSize: 12, color: COLORS.text, marginTop: 4, marginBottom: 10 },
+    identityStatsRow: { flexDirection: "row", justifyContent: "space-between" },
+    identityStat: { fontSize: 12, color: COLORS.muted },
 
-    sectionTitle: { fontSize: 14, fontWeight: "600", color: "#111827", marginBottom: 10 },
+    sectionTitle: { fontSize: 14, fontWeight: "600", color: COLORS.text, marginBottom: 10 },
 
-    radioRow: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-        paddingVertical: 8,
-    },
-    radioText: { fontSize: 13, color: "#111827" },
+    radioRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 },
+    radioText: { fontSize: 13, color: COLORS.text },
 
     inputWrap: {
-        backgroundColor: "#F3F4F6",
+        backgroundColor: COLORS.inputBg,
         borderRadius: 12,
         paddingHorizontal: 12,
         paddingVertical: 10,
         borderWidth: 1,
-        borderColor: "#E5E7EB",
+        borderColor: COLORS.border,
     },
-    inputLabel: { fontSize: 11, color: "#6B7280", marginBottom: 6 },
+    inputLabel: { fontSize: 11, color: COLORS.subtle, marginBottom: 6 },
     inputRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-    input: { flex: 1, fontSize: 13, color: "#111827", paddingVertical: 2 },
+    input: { flex: 1, fontSize: 13, color: COLORS.text, paddingVertical: 2 },
 
-    errorText: { marginTop: 8, fontSize: 12, color: "#B00020" },
+    errorText: { marginTop: 8, fontSize: 12, color: "#F87171" },
 
     primaryButton: {
         marginTop: 18,
-        backgroundColor: ACCENT_BG,
-        borderRadius: 999,
+        backgroundColor: COLORS.accentBg,
+        borderRadius: 14,
         paddingVertical: 12,
         alignItems: "center",
+        borderWidth: 1,
+        borderColor: COLORS.accentBorder,
     },
-    primaryButtonText: { fontSize: 15, fontWeight: "500", color: "#111827" },
+    primaryButtonText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
 
-    footerNote: { marginTop: 10, fontSize: 11, color: "#6B7280", textAlign: "center" },
+    footerNote: { marginTop: 10, fontSize: 11, color: COLORS.subtle, textAlign: "center" },
 
-    sheetOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)" },
-    sheetWrap: { position: "absolute", left: 0, right: 0, bottom: 0 },
+    sheetOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
     sheet: {
-        backgroundColor: "#FFFFFF",
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 2,
+        backgroundColor: COLORS.bg,
         borderTopLeftRadius: 22,
         borderTopRightRadius: 22,
         paddingHorizontal: 16,
         paddingTop: 10,
         paddingBottom: 18,
+        borderWidth: 1,
+        borderColor: COLORS.border,
     },
     sheetHandle: {
         alignSelf: "center",
         width: 56,
         height: 5,
         borderRadius: 999,
-        backgroundColor: "#111827",
-        opacity: 0.25,
+        backgroundColor: "rgba(255,255,255,0.35)",
         marginBottom: 12,
     },
-    sheetTitle: { fontSize: 18, fontWeight: "700", color: "#111827" },
-    sheetSub: { marginTop: 4, fontSize: 12, color: "#6B7280" },
+    sheetTitle: { fontSize: 18, fontWeight: "700", color: COLORS.text },
+    sheetSub: { marginTop: 4, fontSize: 12, color: COLORS.muted },
+
     sheetBtn: {
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
         gap: 8,
-        backgroundColor: ACCENT_BG,
+        backgroundColor: COLORS.accentBg,
         borderRadius: 999,
         paddingVertical: 12,
+        borderWidth: 1,
+        borderColor: COLORS.accentBorder,
     },
-    sheetBtnText: { fontSize: 14, fontWeight: "600", color: "#111827" },
+    sheetBtnText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
 });

@@ -1,47 +1,85 @@
-import React from "react";
-import { SafeAreaView, View, Text, Pressable, Platform, ActivityIndicator, Alert, StyleSheet } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import React, { useEffect, useRef, useState } from "react";
+import {
+    Modal,
+    View,
+    Text,
+    Pressable,
+    StyleSheet,
+    Animated,
+    Easing,
+    ActivityIndicator,
+    Alert,
+    Platform,
+} from "react-native";
+import { COLORS } from "../src/theme/colors";
 import { loadLastWallet, saveHolderSession } from "../src/storage/walletSession";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
-export default function ConnectIssuer() {
-    const navigation = useNavigation<any>();
-    const [loading, setLoading] = React.useState(false);
+function notify(title: string, msg: string) {
+    if (Platform.OS === "web") {
+        window.alert(`${title}\n\n${msg}`);
+    } else {
+        Alert.alert(title, msg);
+    }
+}
 
-    function notify(title: string, msg: string) {
-        if (Platform.OS === "web") {
-            window.alert(`${title}\n\n${msg}`);
-        } else {
-            Alert.alert(title, msg);
+async function signPayload(holderDid: string, payload: any): Promise<{ sig: string; alg: string }> {
+    const sess = await loadLastWallet();
+    if (!sess?.profileName || !sess?.passphrase) throw new Error("missing_wallet_session");
+    if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+
+    const resp = await fetch(`${BASE_URL}/wallets/sign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            profile: sess.profileName,
+            passphrase: sess.passphrase,
+            did: holderDid,
+            payload,
+        }),
+    });
+
+    const json = await resp.json();
+    if (!resp.ok || !json.ok) throw new Error(json.error || json.message || "sign_failed");
+    return { sig: String(json.sig), alg: String(json.alg || "") };
+}
+
+export default function ConnectIssuerSheet({
+    visible,
+    onClose,
+    onPaired,
+}: {
+    visible: boolean;
+    onClose: () => void;
+    onPaired?: () => void;
+}) {
+    const translateY = useRef(new Animated.Value(420)).current;
+    const [mounted, setMounted] = useState(visible);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (visible) {
+            setMounted(true);
+            Animated.timing(translateY, {
+                toValue: 0,
+                duration: 220,
+                easing: Easing.out(Easing.cubic),
+                useNativeDriver: true,
+            }).start();
+        } else if (mounted) {
+            Animated.timing(translateY, {
+                toValue: 420,
+                duration: 180,
+                easing: Easing.in(Easing.cubic),
+                useNativeDriver: true,
+            }).start(({ finished }) => finished && setMounted(false));
         }
-    }
+    }, [visible, mounted, translateY]);
 
-    async function signPayload(holderDid: string, payload: any): Promise<{ sig: string; alg: string }> {
-        const sess = await loadLastWallet();
-        if (!sess?.profileName || !sess?.passphrase) throw new Error("missing_wallet_session");
-        if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
-
-        const resp = await fetch(`${BASE_URL}/wallets/sign`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                profile: sess.profileName,
-                passphrase: sess.passphrase,
-                did: holderDid,
-                payload,
-            }),
-        });
-
-        const json = await resp.json();
-        if (!resp.ok || !json.ok) throw new Error(json.error || json.message || "sign_failed");
-
-        return { sig: String(json.sig), alg: String(json.alg || "") };
-    }
+    if (!mounted) return null;
 
     const onPair = async () => {
-        console.log("[pair] start", { BASE_URL });
-
         if (!BASE_URL) {
             notify("Error", "Missing EXPO_PUBLIC_API_BASE_URL");
             return;
@@ -50,10 +88,9 @@ export default function ConnectIssuer() {
         setLoading(true);
         try {
             const sess = await loadLastWallet();
-            console.log("[pair] session", sess);
-
             if (!sess?.profileName || !sess?.passphrase) {
-                navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
+                notify("Auth", "Missing wallet session.");
+                onClose();
                 return;
             }
 
@@ -63,21 +100,15 @@ export default function ConnectIssuer() {
                 body: JSON.stringify({ profile: sess.profileName, passphrase: sess.passphrase, limit: 1 }),
             });
             const sumJson = await sumResp.json();
-            console.log("[pair] summary", sumJson);
-
             if (!sumResp.ok || !sumJson.ok || !sumJson.activeDid) throw new Error("Could not read active DID");
             const holderDid = String(sumJson.activeDid);
 
             const chResp = await fetch(`${BASE_URL}/connect/challenge`);
             const chJson = await chResp.json();
-            console.log("[pair] challenge", chJson);
-
             if (!chResp.ok || !chJson?.id || !chJson?.challenge) throw new Error("challenge_failed");
 
             const payload = { id: chJson.id, challenge: chJson.challenge, ts: Date.now() };
-
             const { sig, alg } = await signPayload(holderDid, payload);
-            console.log("[pair] signed", { alg, sigLen: sig.length });
 
             const cfResp = await fetch(`${BASE_URL}/connect/confirm`, {
                 method: "POST",
@@ -85,8 +116,6 @@ export default function ConnectIssuer() {
                 body: JSON.stringify({ id: chJson.id, holderDid, payload, sig, alg }),
             });
             const cfJson = await cfResp.json();
-            console.log("[pair] confirm", cfJson);
-
             if (!cfResp.ok || !cfJson.ok || !cfJson.token) throw new Error(cfJson.error || "pair_failed");
 
             await saveHolderSession(sess.profileName, {
@@ -96,7 +125,8 @@ export default function ConnectIssuer() {
             });
 
             notify("Paired", "Holder token saved.");
-            navigation.goBack();
+            onPaired?.();
+            onClose();
         } catch (e: any) {
             console.error("[pair] error", e);
             notify("Error", e?.message || "pair_failed");
@@ -106,24 +136,88 @@ export default function ConnectIssuer() {
     };
 
     return (
-        <SafeAreaView style={styles.container}>
-            <Text style={styles.title}>Connect to issuer</Text>
-            <Pressable style={[styles.btn, loading && { opacity: 0.6 }]} onPress={onPair} disabled={loading}>
-                {loading ? <ActivityIndicator /> : <Text style={styles.btnText}>Pair now</Text>}
-            </Pressable>
+        <Modal transparent visible={mounted} animationType="none" onRequestClose={onClose}>
+            <Pressable style={styles.overlay} onPress={!loading ? onClose : undefined} />
 
-            <Pressable style={styles.link} onPress={() => navigation.goBack()} disabled={loading}>
-                <Text style={styles.linkText}>Back</Text>
-            </Pressable>
-        </SafeAreaView>
+            <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
+                <View style={styles.handle} />
+
+                <Text style={styles.title}>Connect issuer</Text>
+                <Text style={styles.sub}>
+                    Pair this wallet with an issuer to obtain a holder token. You will sign a short challenge using your active DID.
+                </Text>
+
+                <Pressable
+                    style={[styles.primaryBtn, loading && { opacity: 0.6 }]}
+                    onPress={onPair}
+                    disabled={loading}
+                >
+                    {loading ? (
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                            <ActivityIndicator />
+                            <Text style={styles.primaryText}>Pairing…</Text>
+                        </View>
+                    ) : (
+                        <Text style={styles.primaryText}>Pair now</Text>
+                    )}
+                </Pressable>
+
+                <Pressable style={[styles.secondaryBtn, loading && { opacity: 0.6 }]} onPress={onClose} disabled={loading}>
+                    <Text style={styles.secondaryText}>Cancel</Text>
+                </Pressable>
+            </Animated.View>
+        </Modal>
     );
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, padding: 24, backgroundColor: "#0B0F14", justifyContent: "center" },
-    title: { color: "white", fontSize: 18, fontWeight: "800", marginBottom: 14 },
-    btn: { backgroundColor: "#F3E8FF", paddingVertical: 12, borderRadius: 14, alignItems: "center" },
-    btnText: { color: "#111827", fontWeight: "800" },
-    link: { marginTop: 12, alignItems: "center" },
-    linkText: { color: "white", fontWeight: "700" },
+    overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
+
+    sheet: {
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: COLORS.bg,
+        borderTopLeftRadius: 22,
+        borderTopRightRadius: 22,
+        paddingTop: 10,
+        paddingHorizontal: 16,
+        paddingBottom: 18,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+    },
+    handle: {
+        alignSelf: "center",
+        width: 56,
+        height: 5,
+        borderRadius: 999,
+        backgroundColor: "rgba(255,255,255,0.35)",
+        marginBottom: 12,
+    },
+
+    title: { fontSize: 18, fontWeight: "600", color: COLORS.text, marginBottom: 6 },
+    sub: { fontSize: 12, color: COLORS.muted, lineHeight: 16 },
+
+    primaryBtn: {
+        marginTop: 14,
+        backgroundColor: COLORS.accentBg,
+        borderRadius: 14,
+        paddingVertical: 12,
+        alignItems: "center",
+        borderWidth: 1,
+        borderColor: COLORS.accentBorder,
+    },
+    primaryText: { color: COLORS.accentText, fontWeight: "600", fontSize: 14 },
+
+    secondaryBtn: {
+        marginTop: 10,
+        borderRadius: 14,
+        paddingVertical: 12,
+        alignItems: "center",
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        backgroundColor: COLORS.card,
+    },
+    secondaryText: { color: COLORS.text, fontWeight: "600" },
 });
