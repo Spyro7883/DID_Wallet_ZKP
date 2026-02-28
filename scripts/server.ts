@@ -384,6 +384,7 @@ async function schemaIsEmpty(schema: string): Promise<boolean> {
   await ensureAdminSettingsTable();
   await ensureVcIssuanceLogTable();
   await ensureVcRequestsTable();
+  await ensureProofRequestsTable();
 
   agent = await setupAgent(
     "issuer",
@@ -2078,6 +2079,30 @@ async function ensureVcRequestsTable() {
   }
 }
 
+async function ensureProofRequestsTable() {
+  const d = await ds();
+  try {
+    await d.query(`
+      CREATE TABLE IF NOT EXISTS public.proof_requests (
+        id TEXT PRIMARY KEY,                      -- requestId
+        status TEXT NOT NULL DEFAULT 'open',      -- open | closed | expired
+        policy TEXT NOT NULL,
+        requester_id TEXT,
+        nonce TEXT NOT NULL,
+        constraints JSONB NOT NULL DEFAULT '{}'::jsonb,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE INDEX IF NOT EXISTS proof_requests_status_idx ON public.proof_requests(status);
+      CREATE INDEX IF NOT EXISTS proof_requests_created_idx ON public.proof_requests(created_at DESC);
+      CREATE INDEX IF NOT EXISTS proof_requests_policy_idx ON public.proof_requests(policy);
+    `);
+  } finally {
+    await d.destroy();
+  }
+}
+
 app.post("/admin/login", async (req, res) => {
   try {
     const email = String(req.body?.email || "")
@@ -2373,6 +2398,148 @@ app.get("/admin/vc/issued/:id", requireAdmin, async (req, res) => {
     const row = rows?.[0];
     if (!row) return res.status(404).json({ ok: false, error: "not_found" });
     return res.json({ ok: true, item: row });
+  } finally {
+    await d.destroy();
+  }
+});
+
+app.post("/admin/proof-requests", requireAdmin, async (req, res) => {
+  try {
+    const policy = String(req.body?.policy || "").trim();
+    const requesterId = String(req.body?.requesterId || "").trim();
+    const ttlSeconds = Math.min(
+      3600,
+      Math.max(30, Number(req.body?.ttlSeconds || 600)),
+    );
+
+    if (!policy)
+      return res.status(400).json({ ok: false, error: "missing_policy" });
+
+    const requestId = rid(12);
+    const nonce = rid(16);
+    const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+
+    // constraints: momentan doar “ce se cere” (fără circuite)
+    // poți pune aici: vcTypes, fields, purpose, etc.
+    const constraints =
+      req.body?.constraints && typeof req.body.constraints === "object"
+        ? req.body.constraints
+        : {};
+
+    const d = await ds();
+    try {
+      await d.query(
+        `INSERT INTO public.proof_requests
+         (id, policy, requester_id, nonce, constraints, expires_at)
+         VALUES ($1,$2,$3,$4,$5::jsonb,$6)`,
+        [
+          requestId,
+          policy,
+          requesterId || null,
+          nonce,
+          JSON.stringify(constraints),
+          expiresAt.toISOString(),
+        ],
+      );
+    } finally {
+      await d.destroy();
+    }
+
+    // link pe care îl pui în QR
+    const publicUrlBase = String(
+      process.env.PUBLIC_URL_BASE || `http://localhost:${PORT}`,
+    );
+    const link = `${publicUrlBase}/proof-requests/${encodeURIComponent(
+      requestId,
+    )}`;
+
+    return res.json({
+      ok: true,
+      request: {
+        id: requestId,
+        status: "open",
+        policy,
+        requesterId: requesterId || null,
+        nonce,
+        constraints,
+        expiresAt,
+      },
+      link,
+    });
+  } catch (e: any) {
+    return res
+      .status(500)
+      .json({ ok: false, error: "create_failed", message: e?.message });
+  }
+});
+
+app.get("/proof-requests/:id", async (req, res) => {
+  const id = String(req.params.id || "").trim();
+  if (!id) return res.status(400).json({ ok: false, error: "bad_id" });
+
+  const d = await ds();
+  try {
+    const rows = await d.query(
+      `SELECT id, status, policy, requester_id, nonce, constraints, expires_at, created_at
+       FROM public.proof_requests
+       WHERE id = $1
+       LIMIT 1`,
+      [id],
+    );
+    const r = rows?.[0];
+    if (!r) return res.status(404).json({ ok: false, error: "not_found" });
+
+    // expirare simplă
+    const exp = new Date(String(r.expires_at)).getTime();
+    if (Date.now() > exp && String(r.status) === "open") {
+      await d.query(
+        `UPDATE public.proof_requests SET status='expired' WHERE id=$1`,
+        [id],
+      );
+      r.status = "expired";
+    }
+
+    return res.json({
+      ok: true,
+      request: {
+        id: String(r.id),
+        status: String(r.status),
+        policy: String(r.policy),
+        requesterId: r.requester_id ? String(r.requester_id) : null,
+        nonce: String(r.nonce),
+        constraints: r.constraints ?? {},
+        expiresAt: String(r.expires_at),
+        createdAt: String(r.created_at),
+      },
+    });
+  } finally {
+    await d.destroy();
+  }
+});
+
+app.get("/admin/proof-requests", requireAdmin, async (req, res) => {
+  const status = String(req.query?.status || "open").toLowerCase();
+  const allowed = new Set(["open", "closed", "expired", "all"]);
+  const st = allowed.has(status) ? status : "open";
+
+  const limit = Math.min(100, Math.max(1, Number(req.query?.limit || 20)));
+
+  const d = await ds();
+  try {
+    const where = st === "all" ? "" : "WHERE status = $1";
+    const params: any[] = st === "all" ? [limit] : [st, limit];
+
+    const rows = await d.query(
+      `
+      SELECT id, status, policy, requester_id, expires_at, created_at
+      FROM public.proof_requests
+      ${where}
+      ORDER BY created_at DESC
+      LIMIT $${params.length}
+      `,
+      params,
+    );
+    return res.json({ ok: true, items: rows || [] });
   } finally {
     await d.destroy();
   }
