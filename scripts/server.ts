@@ -1804,7 +1804,8 @@ app.post("/wallets/vcs/save", async (req, res) => {
 
 app.post("/wallets/vps/create", async (req, res) => {
   try {
-    const { profile, passphrase, holderDid, vcHashes } = req.body || {};
+    const { profile, passphrase, holderDid, vcHashes, challenge, domain } =
+      req.body || {};
     if (
       !profile ||
       !passphrase ||
@@ -1839,13 +1840,22 @@ app.post("/wallets/vps/create", async (req, res) => {
         verifiableCredential: selected,
       },
       proofFormat: "jwt",
+      challenge: challenge ? String(challenge) : undefined,
+      domain: domain ? String(domain) : undefined,
     });
 
     const saved = await walletAgent.dataStoreSaveVerifiablePresentation({
       verifiablePresentation: vp,
     });
 
-    return res.json({ ok: true, hash: saved?.hash, vp });
+    const vpJwt =
+      typeof vp === "string"
+        ? vp
+        : (vp as any)?.proof?.jwt
+        ? String((vp as any).proof.jwt)
+        : JSON.stringify(vp);
+
+    return res.json({ ok: true, hash: saved?.hash, vpJwt });
   } catch (e: any) {
     console.error("[wallets/vps/create] error:", e?.message || e);
     return res
@@ -2102,6 +2112,38 @@ async function ensureProofRequestsTable() {
     await d.destroy();
   }
 }
+
+app.post("/proof-requests/:id/submit", async (req, res) => {
+  const id = String(req.params.id || "").trim();
+  const { vpJwt, holderDid } = req.body || {};
+  if (!vpJwt || !holderDid)
+    return res.status(400).json({ ok: false, error: "missing_fields" });
+
+  const d = await ds();
+  try {
+    const rows = await d.query(
+      `SELECT id, status, nonce, expires_at FROM public.proof_requests WHERE id=$1 LIMIT 1`,
+      [id],
+    );
+    const r = rows?.[0];
+    if (!r) return res.status(404).json({ ok: false, error: "not_found" });
+
+    const exp = new Date(String(r.expires_at)).getTime();
+    if (Date.now() > exp)
+      return res.status(400).json({ ok: false, error: "expired" });
+    if (String(r.status) !== "open")
+      return res.status(409).json({ ok: false, error: "not_open" });
+
+    await d.query(
+      `UPDATE public.proof_requests SET status='closed' WHERE id=$1`,
+      [id],
+    );
+
+    return res.json({ ok: true, status: "accepted" });
+  } finally {
+    await d.destroy();
+  }
+});
 
 app.post("/admin/login", async (req, res) => {
   try {

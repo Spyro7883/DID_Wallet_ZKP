@@ -125,6 +125,11 @@ export default function WalletScreen() {
         navigation.navigate("ImportBackup");
     };
 
+    const goProofRequestScreen = () => {
+        setSettingsOpen(false);
+        navigation.navigate("ProofRequest");
+    };
+
     const doLogout = () => {
         setSettingsOpen(false);
 
@@ -271,6 +276,7 @@ export default function WalletScreen() {
                     setSettingsOpen(false);
                     setTimeout(() => setConnectOpen(true), 50);
                 }}
+                onProofRequest={goProofRequestScreen}
             />
 
             <ItemDetailsPopup

@@ -14,4 +14,6 @@ export type RootStackParamList = {
   CreateDid: undefined;
   CreateCredential: undefined;
   CreatePresentation: undefined;
+
+  ProofRequest: { requestId?: string; link?: string } | undefined;
 };

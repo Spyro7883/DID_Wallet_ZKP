@@ -15,6 +15,8 @@ import CreateDid from "./screens/createDid";
 import CreateVC from "./screens/createVC";
 import CreateVP from "./screens/createVP";
 
+import ProofRequestScreen from "./screens/proofRequestScreen";
+
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export default function App() {
@@ -54,6 +56,7 @@ export default function App() {
           <Stack.Screen name="CreateDid" component={CreateDid} />
           <Stack.Screen name="CreateCredential" component={CreateVC} />
           <Stack.Screen name="CreatePresentation" component={CreateVP} />
+          <Stack.Screen name="ProofRequest" component={ProofRequestScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>

@@ -20,6 +20,7 @@ type Props = {
     onImportBackup: () => void;
     onLogout: () => void;
     onConnectIssuer: () => void;
+    onProofRequest: () => void;
 };
 
 function SheetItem({
@@ -67,6 +68,7 @@ export default function SettingsSheet({
     onCreateBackup,
     onLogout,
     onConnectIssuer,
+    onProofRequest,
 }: Props) {
     const translateY = useRef(new Animated.Value(420)).current;
     const [mounted, setMounted] = useState(visible);
@@ -192,6 +194,22 @@ export default function SettingsSheet({
                         }}
                         showChevron={false}
                         destructive
+                        iconColor={theme.icon}
+                        chevronColor={theme.chevron}
+                        titleColor={theme.itemTitle}
+                        subColor={theme.itemSub}
+                    />
+                    <View style={[styles.divider, { backgroundColor: theme.divider }]} />
+
+                    <SheetItem
+                        title="Proof request"
+                        subtitle="Scan/paste a verifier request"
+                        icon="qr-code-scanner"
+                        onPress={() => {
+                            onClose();
+                            onProofRequest();
+                        }}
+                        showChevron
                         iconColor={theme.icon}
                         chevronColor={theme.chevron}
                         titleColor={theme.itemTitle}
