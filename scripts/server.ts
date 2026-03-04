@@ -634,12 +634,10 @@ app.post("/connect/confirm", async (req, res) => {
 
     const holderToken = signHolderToken({ sub: holderDid, holderDid });
 
-    // 2) consumă challenge-ul (nu mai ai nevoie de CONNECTIONS Map)
     CHALLENGES.delete(String(id));
 
     console.log(`[connect] ✅ paired holder=${holderDid}`);
 
-    // 3) răspuns
     return res.json({
       ok: true,
       holderDid,
@@ -2143,6 +2141,56 @@ app.post("/proof-requests/:id/submit", async (req, res) => {
   } finally {
     await d.destroy();
   }
+});
+
+async function getProofPolicies(): Promise<any> {
+  return (await getSetting("proof_policies")) ?? {};
+}
+
+app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
+  const policy = String(req.body?.policy || "").trim();
+  if (!policy)
+    return res.status(400).json({ ok: false, error: "missing_policy" });
+
+  const policies = await getProofPolicies();
+  const tpl = policies?.[policy];
+  if (!tpl)
+    return res.status(400).json({ ok: false, error: "policy_not_allowed" });
+
+  const ttlSeconds = Math.min(
+    3600,
+    Math.max(30, Number(tpl.ttlSeconds || 600)),
+  );
+  const constraints = tpl.constraints ?? {};
+
+  const requestId = rid(12);
+  const nonce = rid(16);
+  const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+
+  const d = await ds();
+  try {
+    await d.query(
+      `INSERT INTO public.proof_requests (id, policy, requester_id, nonce, constraints, expires_at)
+       VALUES ($1,$2,$3,$4,$5::jsonb,$6)`,
+      [
+        requestId,
+        policy,
+        null,
+        nonce,
+        JSON.stringify(constraints),
+        expiresAt.toISOString(),
+      ],
+    );
+  } finally {
+    await d.destroy();
+  }
+
+  const publicUrlBase = String(process.env.PUBLIC_URL_BASE);
+  const link = `${publicUrlBase}/proof-requests/${encodeURIComponent(
+    requestId,
+  )}`;
+
+  return res.json({ ok: true, requestId, link });
 });
 
 app.post("/admin/login", async (req, res) => {

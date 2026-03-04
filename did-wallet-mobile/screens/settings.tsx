@@ -185,6 +185,23 @@ export default function SettingsSheet({
                     <View style={[styles.divider, { backgroundColor: theme.divider }]} />
 
                     <SheetItem
+                        title="Proof request"
+                        subtitle="Scan/paste a verifier request"
+                        icon="qr-code-scanner"
+                        onPress={() => {
+                            onClose();
+                            onProofRequest();
+                        }}
+                        showChevron
+                        iconColor={theme.icon}
+                        chevronColor={theme.chevron}
+                        titleColor={theme.itemTitle}
+                        subColor={theme.itemSub}
+                    />
+
+                    <View style={[styles.divider, { backgroundColor: theme.divider }]} />
+
+                    <SheetItem
                         title="Logout"
                         subtitle="End this session on this device"
                         icon="logout"
@@ -194,22 +211,6 @@ export default function SettingsSheet({
                         }}
                         showChevron={false}
                         destructive
-                        iconColor={theme.icon}
-                        chevronColor={theme.chevron}
-                        titleColor={theme.itemTitle}
-                        subColor={theme.itemSub}
-                    />
-                    <View style={[styles.divider, { backgroundColor: theme.divider }]} />
-
-                    <SheetItem
-                        title="Proof request"
-                        subtitle="Scan/paste a verifier request"
-                        icon="qr-code-scanner"
-                        onPress={() => {
-                            onClose();
-                            onProofRequest();
-                        }}
-                        showChevron
                         iconColor={theme.icon}
                         chevronColor={theme.chevron}
                         titleColor={theme.itemTitle}

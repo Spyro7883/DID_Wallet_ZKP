@@ -13,15 +13,11 @@ import {
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
-import { useNavigation, useRoute } from "@react-navigation/native";
-import type { RouteProp } from "@react-navigation/native";
-import type { RootStackParamList } from "../src/navigation/types";
+import { useNavigation } from "@react-navigation/native";
 import { loadLastWallet } from "../src/storage/walletSession";
 import { COLORS } from "../src/theme/colors";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
-
-type RouteT = RouteProp<RootStackParamList, "ProofRequest">;
 
 type ProofRequest = {
     id: string;
@@ -49,21 +45,6 @@ function notify(title: string, msg: string) {
     }
 }
 
-function parseRequestId(input: string): string {
-    const s = String(input || "").trim();
-    if (!s) return "";
-
-    if (/^[a-z0-9_-]{8,}$/i.test(s) && !s.includes("/") && !s.includes(":")) return s;
-
-    const m1 = /\/proof-requests\/([^/?#]+)/i.exec(s);
-    if (m1?.[1]) return decodeURIComponent(m1[1]);
-
-    const m2 = /proof-request\/([^/?#]+)/i.exec(s);
-    if (m2?.[1]) return decodeURIComponent(m2[1]);
-
-    return "";
-}
-
 function fmtDateTime(iso: string) {
     const v = String(iso || "");
     return v ? v.slice(0, 19).replace("T", " ") : "-";
@@ -74,15 +55,24 @@ function isExpired(expiresAtIso: string) {
     return Number.isFinite(t) ? Date.now() > t : false;
 }
 
+function getHolderToken(sess: any): string | null {
+    return (
+        sess?.holderToken ||
+        sess?.holderJwt ||
+        sess?.token ||
+        sess?.holder?.token ||
+        null
+    );
+}
+
 export default function ProofRequestScreen() {
     const navigation = useNavigation<any>();
-    const route = useRoute<RouteT>();
     const insets = useSafeAreaInsets();
 
     const [holderDid, setHolderDid] = useState("");
 
-    const [input, setInput] = useState(route.params?.requestId || route.params?.link || "");
-    const requestId = useMemo(() => parseRequestId(input), [input]);
+    const [policy, setPolicy] = useState("office_entry");
+    const [starting, setStarting] = useState(false);
 
     const [reqLoading, setReqLoading] = useState(false);
     const [req, setReq] = useState<ProofRequest | null>(null);
@@ -108,7 +98,6 @@ export default function ProofRequestScreen() {
 
     const expires = req?.expiresAt ? isExpired(req.expiresAt) : false;
 
-    const canLoad = !!requestId && !reqLoading;
     const canSend = !!req && req.status === "open" && !expires && !sending;
 
     const selectedHashes = useMemo(
@@ -175,85 +164,110 @@ export default function ProofRequestScreen() {
         }
     }, [navigation]);
 
-    const autoSelectForTypes = useCallback(
-        (types: string[], list: VCListItem[]) => {
-            if (!types.length) return;
+    const autoSelectForTypes = useCallback((types: string[], list: VCListItem[]) => {
+        if (!types.length) return;
 
-            const byType = new Map<string, VCListItem[]>();
-            for (const vc of list) {
-                if (!byType.has(vc.title)) byType.set(vc.title, []);
-                byType.get(vc.title)!.push(vc);
-            }
-            for (const arr of byType.values()) {
-                arr.sort((a, b) => String(b.issuanceDate).localeCompare(String(a.issuanceDate)));
-            }
+        const byType = new Map<string, VCListItem[]>();
+        for (const vc of list) {
+            if (!byType.has(vc.title)) byType.set(vc.title, []);
+            byType.get(vc.title)!.push(vc);
+        }
+        for (const arr of byType.values()) {
+            arr.sort((a, b) => String(b.issuanceDate).localeCompare(String(a.issuanceDate)));
+        }
 
-            const next: Record<string, boolean> = {};
-            for (const t of types) {
-                const arr = byType.get(t);
-                if (arr?.length) next[arr[0].hash] = true;
+        const next: Record<string, boolean> = {};
+        for (const t of types) {
+            const arr = byType.get(t);
+            if (arr?.length) next[arr[0].hash] = true;
+        }
+        setSelected(next);
+    }, []);
+
+    const loadRequestById = useCallback(
+        async (id: string) => {
+            if (!id) throw new Error("missing_request_id");
+            if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+
+            setReqErr("");
+            setResult(null);
+            setReqLoading(true);
+
+            try {
+                const r = await fetch(`${BASE_URL}/proof-requests/${encodeURIComponent(id)}`, {
+                    method: "GET",
+                    headers: { "Content-Type": "application/json" },
+                });
+                const j = await r.json().catch(() => ({}));
+                if (!r.ok || !j?.ok || !j?.request) throw new Error(j?.error || "request_not_found");
+
+                const rr: ProofRequest = {
+                    id: String(j.request.id),
+                    status: String(j.request.status),
+                    policy: String(j.request.policy),
+                    requesterId: j.request.requesterId ? String(j.request.requesterId) : null,
+                    nonce: String(j.request.nonce),
+                    constraints: j.request.constraints ?? {},
+                    expiresAt: String(j.request.expiresAt),
+                    createdAt: String(j.request.createdAt),
+                };
+                setReq(rr);
+
+                const list = await loadVcs();
+                autoSelectForTypes(
+                    Array.isArray(rr.constraints?.vcTypes) ? rr.constraints.vcTypes.map(String) : [],
+                    list,
+                );
+            } finally {
+                setReqLoading(false);
             }
-            setSelected(next);
         },
-        [],
+        [loadVcs, autoSelectForTypes],
     );
 
-    const loadRequest = useCallback(async () => {
-        if (!requestId) {
-            setReqErr("Paste a proof request link or id.");
-            return;
-        }
-        if (!BASE_URL) {
-            setReqErr("Missing EXPO_PUBLIC_API_BASE_URL");
-            return;
-        }
+    const startRequest = useCallback(async () => {
+        if (!BASE_URL) return notify("Error", "Missing EXPO_PUBLIC_API_BASE_URL");
 
+        setStarting(true);
         setReqErr("");
         setResult(null);
-        setReqLoading(true);
 
         try {
-            const r = await fetch(`${BASE_URL}/proof-requests/${encodeURIComponent(requestId)}`, {
-                method: "GET",
-                headers: { "Content-Type": "application/json" },
+            const sess = await loadLastWallet();
+            const holderToken = getHolderToken(sess);
+
+            if (!holderToken) {
+                notify("Not connected", "Missing holder token. Do pairing/connect first.");
+                return;
+            }
+
+            const r = await fetch(`${BASE_URL}/holder/proof-requests/start`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${holderToken}`,
+                },
+                body: JSON.stringify({ policy: String(policy || "").trim() }),
             });
+
             const j = await r.json().catch(() => ({}));
-            if (!r.ok || !j?.ok || !j?.request) throw new Error(j?.error || "request_not_found");
+            if (!r.ok || !j?.ok) throw new Error(j?.error || "start_failed");
 
-            const rr: ProofRequest = {
-                id: String(j.request.id),
-                status: String(j.request.status),
-                policy: String(j.request.policy),
-                requesterId: j.request.requesterId ? String(j.request.requesterId) : null,
-                nonce: String(j.request.nonce),
-                constraints: j.request.constraints ?? {},
-                expiresAt: String(j.request.expiresAt),
-                createdAt: String(j.request.createdAt),
-            };
-            setReq(rr);
+            const newId = String(j.requestId || j.id || j.request?.id || "").trim();
+            if (!newId) throw new Error("bad_start_response");
 
-            const list = await loadVcs();
-            autoSelectForTypes(
-                Array.isArray(rr.constraints?.vcTypes) ? rr.constraints.vcTypes.map(String) : [],
-                list,
-            );
+            await loadRequestById(newId);
         } catch (e: any) {
             setReq(null);
-            setReqErr(e?.message || "Could not load request");
+            setReqErr(e?.message || "Could not start request");
         } finally {
-            setReqLoading(false);
+            setStarting(false);
         }
-    }, [requestId, loadVcs, autoSelectForTypes]);
+    }, [policy, loadRequestById]);
 
     useEffect(() => {
         loadHolderDid();
     }, [loadHolderDid]);
-
-    useEffect(() => {
-        if ((route.params?.requestId || route.params?.link) && requestId) {
-            loadRequest();
-        }
-    }, []);
 
     const generateAndSend = useCallback(async () => {
         if (!req) return;
@@ -280,6 +294,11 @@ export default function ProofRequestScreen() {
             return;
         }
 
+        if (!holderDid.trim()) {
+            notify("Holder DID", "Missing holder DID.");
+            return;
+        }
+
         setSending(true);
         setResult(null);
 
@@ -302,8 +321,11 @@ export default function ProofRequestScreen() {
                     domain: req.policy,
                 }),
             });
+
             const vpJson = await vpResp.json().catch(() => ({}));
-            if (!vpResp.ok || !vpJson?.ok) throw new Error(vpJson?.error || vpJson?.message || "create_vp_failed");
+            if (!vpResp.ok || !vpJson?.ok) {
+                throw new Error(vpJson?.error || vpJson?.message || "create_vp_failed");
+            }
 
             const vpJwt = vpJson.vpJwt ? String(vpJson.vpJwt) : "";
             const vpHash = vpJson.hash ? String(vpJson.hash) : "";
@@ -315,9 +337,9 @@ export default function ProofRequestScreen() {
                     holderDid: holderDid.trim(),
                     vpJwt: vpJwt || undefined,
                     vpHash: vpHash || undefined,
-                    vp: vpJson.vp || undefined,
                 }),
             });
+
             const subJson = await subResp.json().catch(() => ({}));
             if (!subResp.ok || !subJson?.ok) throw new Error(subJson?.error || "submit_failed");
 
@@ -339,7 +361,10 @@ export default function ProofRequestScreen() {
     }, [vcs, requiredTypes]);
 
     return (
-        <SafeAreaView style={[styles.container, { paddingTop: insets.top + 12 }]} edges={["left", "right"]}>
+        <SafeAreaView
+            style={[styles.container, { paddingTop: insets.top + 12 }]}
+            edges={["left", "right"]}
+        >
             <ScrollView contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
                 <View style={styles.topBar}>
                     <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={styles.topLeft}>
@@ -349,26 +374,31 @@ export default function ProofRequestScreen() {
                     <View style={styles.topRight} />
                 </View>
 
-                <Text style={styles.label}>Request link / id</Text>
+                <Text style={styles.label}>Start request</Text>
                 <View style={styles.inputRow}>
                     <TextInput
-                        value={input}
-                        onChangeText={setInput}
-                        placeholder="Paste /proof-requests/<id> or id"
+                        value={policy}
+                        onChangeText={setPolicy}
+                        placeholder="office_entry"
                         placeholderTextColor={COLORS.subtle}
                         style={[styles.input, { flex: 1 }]}
                         autoCapitalize="none"
                         autoCorrect={false}
                     />
                     <Pressable
-                        onPress={loadRequest}
-                        disabled={!canLoad}
-                        style={[styles.smallBtn, !canLoad && { opacity: 0.6 }]}
+                        onPress={startRequest}
+                        disabled={starting}
+                        style={[styles.smallBtn, starting && { opacity: 0.6 }]}
                     >
-                        <Text style={styles.smallBtnText}>{reqLoading ? "..." : "Load"}</Text>
+                        <Text style={styles.smallBtnText}>{starting ? "..." : "Start"}</Text>
                     </Pressable>
                 </View>
+
                 {reqErr ? <Text style={styles.err}>{reqErr}</Text> : null}
+
+                {reqLoading ? (
+                    <Text style={{ color: COLORS.subtle, marginTop: 10 }}>Loading request...</Text>
+                ) : null}
 
                 {req ? (
                     <View style={styles.card}>
@@ -376,7 +406,7 @@ export default function ProofRequestScreen() {
                             <View style={{ flex: 1 }}>
                                 <Text style={styles.cardTitle}>{req.policy}</Text>
                                 <Text style={styles.cardSub}>
-                                    {req.requesterId ? `By: ${req.requesterId}` : "By: -"} · {req.status.toUpperCase()}
+                                    {req.requesterId ? `By: ${req.requesterId}` : "By: -"} · {String(req.status).toUpperCase()}
                                 </Text>
                             </View>
                             <View style={{ alignItems: "flex-end" }}>
@@ -436,7 +466,11 @@ export default function ProofRequestScreen() {
 
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
                     <Text style={styles.label}>(Select) Credentials</Text>
-                    <Pressable onPress={loadVcs} disabled={vcsLoading} style={[styles.smallBtn, vcsLoading && { opacity: 0.6 }]}>
+                    <Pressable
+                        onPress={loadVcs}
+                        disabled={vcsLoading}
+                        style={[styles.smallBtn, vcsLoading && { opacity: 0.6 }]}
+                    >
                         <Text style={styles.smallBtnText}>{vcsLoading ? "..." : "Reload"}</Text>
                     </Pressable>
                 </View>
@@ -501,7 +535,12 @@ export default function ProofRequestScreen() {
 }
 
 const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.bg, paddingHorizontal: 16, paddingBottom: 16 },
+    container: {
+        flex: 1,
+        backgroundColor: COLORS.bg,
+        paddingHorizontal: 16,
+        paddingBottom: 16,
+    },
 
     topBar: { height: 48, justifyContent: "center", alignItems: "center", marginBottom: 12 },
     topLeft: { position: "absolute", left: 0, padding: 4 },
