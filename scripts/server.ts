@@ -379,6 +379,58 @@ async function schemaIsEmpty(schema: string): Promise<boolean> {
   }
 }
 
+function uniqStrings(a: any): string[] {
+  if (!Array.isArray(a)) return [];
+  return Array.from(new Set(a.map((x) => String(x))));
+}
+
+function normalizeConstraints(input: any) {
+  const c =
+    input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const out: any = { ...c };
+
+  if ("vcTypes" in out) out.vcTypes = uniqStrings(out.vcTypes);
+  if ("rules" in out) out.rules = uniqStrings(out.rules);
+
+  return out;
+}
+
+function decodeJwtPayloadLoose(jwtStr: string): any {
+  const parts = String(jwtStr || "").split(".");
+  if (parts.length !== 3) return null;
+  try {
+    return JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function getPublicBaseUrl(req: any) {
+  const env = String(process.env.PUBLIC_URL_BASE || "").trim();
+  if (env) return env.replace(/\/+$/, "");
+  const proto =
+    String(req.headers["x-forwarded-proto"] || "")
+      .split(",")[0]
+      .trim() ||
+    req.protocol ||
+    "http";
+  const host =
+    String(req.headers["x-forwarded-host"] || "")
+      .split(",")[0]
+      .trim() || req.get("host");
+  return `${proto}://${host}`;
+}
+
+async function getProofPolicies(): Promise<Record<string, any>> {
+  return (await getSetting("proof_policies")) ?? {};
+}
+
+async function upsertProofPolicy(policy: string, tpl: any) {
+  const cur = (await getProofPolicies()) ?? {};
+  cur[policy] = tpl;
+  await setSetting("proof_policies", cur);
+}
+
 (async () => {
   await ensureAdminUsersTable();
   await ensureAdminSettingsTable();
@@ -2099,12 +2151,31 @@ async function ensureProofRequestsTable() {
         nonce TEXT NOT NULL,
         constraints JSONB NOT NULL DEFAULT '{}'::jsonb,
         expires_at TIMESTAMPTZ NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+        -- submission/audit (NEW)
+        submitted_at TIMESTAMPTZ,
+        holder_did TEXT,
+        vp_hash TEXT,
+        vp_jwt TEXT,
+        result TEXT,          -- accepted | rejected
+        error TEXT
       );
+
+      -- if table existed, add missing columns safely
+      ALTER TABLE public.proof_requests
+        ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS holder_did TEXT,
+        ADD COLUMN IF NOT EXISTS vp_hash TEXT,
+        ADD COLUMN IF NOT EXISTS vp_jwt TEXT,
+        ADD COLUMN IF NOT EXISTS result TEXT,
+        ADD COLUMN IF NOT EXISTS error TEXT;
 
       CREATE INDEX IF NOT EXISTS proof_requests_status_idx ON public.proof_requests(status);
       CREATE INDEX IF NOT EXISTS proof_requests_created_idx ON public.proof_requests(created_at DESC);
       CREATE INDEX IF NOT EXISTS proof_requests_policy_idx ON public.proof_requests(policy);
+      CREATE INDEX IF NOT EXISTS proof_requests_holder_idx ON public.proof_requests(holder_did);
+      CREATE INDEX IF NOT EXISTS proof_requests_submitted_idx ON public.proof_requests(submitted_at DESC);
     `);
   } finally {
     await d.destroy();
@@ -2113,29 +2184,75 @@ async function ensureProofRequestsTable() {
 
 app.post("/proof-requests/:id/submit", async (req, res) => {
   const id = String(req.params.id || "").trim();
-  const { vpJwt, holderDid } = req.body || {};
+  const { vpJwt, holderDid, vpHash } = req.body || {};
   if (!vpJwt || !holderDid)
     return res.status(400).json({ ok: false, error: "missing_fields" });
 
   const d = await ds();
   try {
     const rows = await d.query(
-      `SELECT id, status, nonce, expires_at FROM public.proof_requests WHERE id=$1 LIMIT 1`,
+      `SELECT id, status, nonce, policy, expires_at
+       FROM public.proof_requests
+       WHERE id=$1
+       LIMIT 1`,
       [id],
     );
     const r = rows?.[0];
     if (!r) return res.status(404).json({ ok: false, error: "not_found" });
 
     const exp = new Date(String(r.expires_at)).getTime();
-    if (Date.now() > exp)
+    if (Date.now() > exp) {
       return res.status(400).json({ ok: false, error: "expired" });
+    }
     if (String(r.status) !== "open")
       return res.status(409).json({ ok: false, error: "not_open" });
 
+    const payload = decodeJwtPayloadLoose(String(vpJwt));
+    const nonceIn =
+      payload?.nonce ?? payload?.vp?.nonce ?? payload?.vp?.proof?.challenge;
+    const aud = payload?.aud;
+
+    let ok = true;
+    let err: string | null = null;
+
+    if (nonceIn && String(nonceIn) !== String(r.nonce)) {
+      ok = false;
+      err = "nonce_mismatch";
+    }
+
+    if (ok && aud) {
+      const audOk = Array.isArray(aud)
+        ? aud.map(String).includes(String(r.policy))
+        : String(aud) === String(r.policy);
+      if (!audOk) {
+        ok = false;
+        err = "aud_mismatch";
+      }
+    }
+
     await d.query(
-      `UPDATE public.proof_requests SET status='closed' WHERE id=$1`,
-      [id],
+      `UPDATE public.proof_requests
+       SET status='closed',
+           submitted_at=now(),
+           holder_did=$2,
+           vp_hash=$3,
+           vp_jwt=$4,
+           result=$5,
+           error=$6
+       WHERE id=$1`,
+      [
+        id,
+        String(holderDid),
+        vpHash ? String(vpHash) : null,
+        String(vpJwt),
+        ok ? "accepted" : "rejected",
+        ok ? null : err,
+      ],
     );
+
+    if (!ok) {
+      return res.status(400).json({ ok: false, error: err });
+    }
 
     return res.json({ ok: true, status: "accepted" });
   } finally {
@@ -2143,25 +2260,40 @@ app.post("/proof-requests/:id/submit", async (req, res) => {
   }
 });
 
-async function getProofPolicies(): Promise<any> {
-  return (await getSetting("proof_policies")) ?? {};
-}
-
 app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
   const policy = String(req.body?.policy || "").trim();
   if (!policy)
     return res.status(400).json({ ok: false, error: "missing_policy" });
 
-  const policies = await getProofPolicies();
-  const tpl = policies?.[policy];
-  if (!tpl)
-    return res.status(400).json({ ok: false, error: "policy_not_allowed" });
+  // optional: allow client to pass extra constraints (prototype)
+  const clientConstraints =
+    req.body?.constraints && typeof req.body.constraints === "object"
+      ? req.body.constraints
+      : null;
 
+  const policies = await getProofPolicies();
+
+  // If policy missing -> auto create default template (no more policy_not_allowed)
+  let tpl = policies?.[policy];
+  if (!tpl) {
+    tpl = { ttlSeconds: 600, constraints: {} };
+    await upsertProofPolicy(policy, tpl);
+  }
+
+  const ttlFromTpl = Number(tpl?.ttlSeconds || 600);
+  const ttlFromReq = req.body?.ttlSeconds;
   const ttlSeconds = Math.min(
     3600,
-    Math.max(30, Number(tpl.ttlSeconds || 600)),
+    Math.max(
+      30,
+      Number.isFinite(Number(ttlFromReq)) ? Number(ttlFromReq) : ttlFromTpl,
+    ),
   );
-  const constraints = tpl.constraints ?? {};
+
+  const mergedConstraints = normalizeConstraints({
+    ...(tpl?.constraints ?? {}),
+    ...(clientConstraints ?? {}),
+  });
 
   const requestId = rid(12);
   const nonce = rid(16);
@@ -2177,7 +2309,7 @@ app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
         policy,
         null,
         nonce,
-        JSON.stringify(constraints),
+        JSON.stringify(mergedConstraints),
         expiresAt.toISOString(),
       ],
     );
@@ -2185,8 +2317,7 @@ app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
     await d.destroy();
   }
 
-  const publicUrlBase = String(process.env.PUBLIC_URL_BASE);
-  const link = `${publicUrlBase}/proof-requests/${encodeURIComponent(
+  const link = `${getPublicBaseUrl(req)}/proof-requests/${encodeURIComponent(
     requestId,
   )}`;
 
@@ -2444,6 +2575,28 @@ app.post("/admin/vc/issue", requireAdmin, async (req, res) => {
     return res
       .status(500)
       .json({ ok: false, error: "issue_failed", message: e?.message });
+  }
+});
+
+app.get("/admin/proof-requests/:id", requireAdmin, async (req, res) => {
+  const id = String(req.params.id || "").trim();
+  const d = await ds();
+  try {
+    const rows = await d.query(
+      `SELECT id, status, policy, requester_id, nonce, constraints,
+              expires_at, created_at,
+              submitted_at, holder_did, vp_hash, result, error
+       FROM public.proof_requests
+       WHERE id=$1
+       LIMIT 1`,
+      [id],
+    );
+    const r = rows?.[0];
+    if (!r) return res.status(404).json({ ok: false, error: "not_found" });
+
+    return res.json({ ok: true, request: r });
+  } finally {
+    await d.destroy();
   }
 });
 

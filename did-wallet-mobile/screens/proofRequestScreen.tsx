@@ -19,6 +19,9 @@ import { COLORS } from "../src/theme/colors";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
+const REQUIRED_TYPES = ["CitizenshipCredential", "AgeCredential", "IncomeCredential"] as const;
+const FIXED_POLICY = "office_entry";
+
 type ProofRequest = {
     id: string;
     status: "open" | "closed" | "expired" | string;
@@ -71,10 +74,6 @@ export default function ProofRequestScreen() {
 
     const [holderDid, setHolderDid] = useState("");
 
-    const [policy, setPolicy] = useState("office_entry");
-    const [starting, setStarting] = useState(false);
-
-    const [reqLoading, setReqLoading] = useState(false);
     const [req, setReq] = useState<ProofRequest | null>(null);
     const [reqErr, setReqErr] = useState("");
 
@@ -85,20 +84,7 @@ export default function ProofRequestScreen() {
     const [sending, setSending] = useState(false);
     const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
 
-    const constraints = req?.constraints ?? {};
-    const requiredTypes: string[] = useMemo(() => {
-        const vt = constraints?.vcTypes;
-        return Array.isArray(vt) ? vt.map(String) : [];
-    }, [constraints]);
-
-    const requiredRules: string[] = useMemo(() => {
-        const rr = constraints?.rules;
-        return Array.isArray(rr) ? rr.map(String) : [];
-    }, [constraints]);
-
-    const expires = req?.expiresAt ? isExpired(req.expiresAt) : false;
-
-    const canSend = !!req && req.status === "open" && !expires && !sending;
+    const toggle = (hash: string) => setSelected((p) => ({ ...p, [hash]: !p[hash] }));
 
     const selectedHashes = useMemo(
         () => Object.keys(selected).filter((h) => selected[h]),
@@ -106,12 +92,21 @@ export default function ProofRequestScreen() {
     );
 
     const missingRequired = useMemo(() => {
-        if (!requiredTypes.length) return [];
         const have = new Set(vcs.map((v) => v.title));
-        return requiredTypes.filter((t) => !have.has(t));
-    }, [requiredTypes, vcs]);
+        return REQUIRED_TYPES.filter((t) => !have.has(t));
+    }, [vcs]);
 
-    const toggle = (hash: string) => setSelected((p) => ({ ...p, [hash]: !p[hash] }));
+    const missingSelection = useMemo(() => {
+        const selectedVCs = vcs.filter((x) => selected[x.hash]);
+        const haveTypes = new Set(selectedVCs.map((x) => x.title));
+        return REQUIRED_TYPES.filter((t) => !haveTypes.has(t));
+    }, [vcs, selected]);
+
+    const canSend =
+        !sending &&
+        !!holderDid.trim() &&
+        missingRequired.length === 0 &&
+        missingSelection.length === 0;
 
     const loadHolderDid = useCallback(async () => {
         try {
@@ -164,150 +159,87 @@ export default function ProofRequestScreen() {
         }
     }, [navigation]);
 
-    const autoSelectForTypes = useCallback((types: string[], list: VCListItem[]) => {
-        if (!types.length) return;
+    const listForDisplay = useMemo(() => {
+        const a = vcs.filter((x) => (REQUIRED_TYPES as readonly string[]).includes(x.title));
+        const b = vcs.filter((x) => !(REQUIRED_TYPES as readonly string[]).includes(x.title));
+        return [...a, ...b];
+    }, [vcs]);
 
-        const byType = new Map<string, VCListItem[]>();
-        for (const vc of list) {
-            if (!byType.has(vc.title)) byType.set(vc.title, []);
-            byType.get(vc.title)!.push(vc);
-        }
-        for (const arr of byType.values()) {
-            arr.sort((a, b) => String(b.issuanceDate).localeCompare(String(a.issuanceDate)));
-        }
+    async function fetchProofRequest(id: string): Promise<ProofRequest> {
+        const r = await fetch(`${BASE_URL}/proof-requests/${encodeURIComponent(id)}`, {
+            method: "GET",
+            headers: { "Content-Type": "application/json" },
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j?.ok || !j?.request) throw new Error(j?.error || "request_not_found");
 
-        const next: Record<string, boolean> = {};
-        for (const t of types) {
-            const arr = byType.get(t);
-            if (arr?.length) next[arr[0].hash] = true;
-        }
-        setSelected(next);
-    }, []);
+        return {
+            id: String(j.request.id),
+            status: String(j.request.status),
+            policy: String(j.request.policy),
+            requesterId: j.request.requesterId ? String(j.request.requesterId) : null,
+            nonce: String(j.request.nonce),
+            constraints: j.request.constraints ?? {},
+            expiresAt: String(j.request.expiresAt),
+            createdAt: String(j.request.createdAt),
+        };
+    }
 
-    const loadRequestById = useCallback(
-        async (id: string) => {
-            if (!id) throw new Error("missing_request_id");
-            if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+    async function startProofSessionFixed(): Promise<ProofRequest> {
+        const sess = await loadLastWallet();
+        const holderToken = getHolderToken(sess);
+        if (!holderToken) throw new Error("missing_holder_token");
 
-            setReqErr("");
-            setResult(null);
-            setReqLoading(true);
+        const r = await fetch(`${BASE_URL}/holder/proof-requests/start`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${holderToken}`,
+            },
+            body: JSON.stringify({ policy: FIXED_POLICY }),
+        });
 
-            try {
-                const r = await fetch(`${BASE_URL}/proof-requests/${encodeURIComponent(id)}`, {
-                    method: "GET",
-                    headers: { "Content-Type": "application/json" },
-                });
-                const j = await r.json().catch(() => ({}));
-                if (!r.ok || !j?.ok || !j?.request) throw new Error(j?.error || "request_not_found");
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j?.ok) throw new Error(j?.error || "start_failed");
 
-                const rr: ProofRequest = {
-                    id: String(j.request.id),
-                    status: String(j.request.status),
-                    policy: String(j.request.policy),
-                    requesterId: j.request.requesterId ? String(j.request.requesterId) : null,
-                    nonce: String(j.request.nonce),
-                    constraints: j.request.constraints ?? {},
-                    expiresAt: String(j.request.expiresAt),
-                    createdAt: String(j.request.createdAt),
-                };
-                setReq(rr);
+        const requestId = String(j.requestId || j.id || j.request?.id || "").trim();
+        if (!requestId) throw new Error("bad_start_response");
 
-                const list = await loadVcs();
-                autoSelectForTypes(
-                    Array.isArray(rr.constraints?.vcTypes) ? rr.constraints.vcTypes.map(String) : [],
-                    list,
-                );
-            } finally {
-                setReqLoading(false);
-            }
-        },
-        [loadVcs, autoSelectForTypes],
-    );
+        return await fetchProofRequest(requestId);
+    }
 
-    const startRequest = useCallback(async () => {
+    const generateAndSend = useCallback(async () => {
         if (!BASE_URL) return notify("Error", "Missing EXPO_PUBLIC_API_BASE_URL");
 
-        setStarting(true);
+        setSending(true);
         setReqErr("");
         setResult(null);
 
         try {
-            const sess = await loadLastWallet();
-            const holderToken = getHolderToken(sess);
+            if (!holderDid.trim()) throw new Error("missing_holder_did");
 
-            if (!holderToken) {
-                notify("Not connected", "Missing holder token. Do pairing/connect first.");
-                return;
+            if (missingRequired.length) {
+                throw new Error(`wallet_missing:${missingRequired.join(",")}`);
+            }
+            if (missingSelection.length) {
+                throw new Error(`select_required:${missingSelection.join(",")}`);
             }
 
-            const r = await fetch(`${BASE_URL}/holder/proof-requests/start`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${holderToken}`,
-                },
-                body: JSON.stringify({ policy: String(policy || "").trim() }),
-            });
-
-            const j = await r.json().catch(() => ({}));
-            if (!r.ok || !j?.ok) throw new Error(j?.error || "start_failed");
-
-            const newId = String(j.requestId || j.id || j.request?.id || "").trim();
-            if (!newId) throw new Error("bad_start_response");
-
-            await loadRequestById(newId);
-        } catch (e: any) {
-            setReq(null);
-            setReqErr(e?.message || "Could not start request");
-        } finally {
-            setStarting(false);
-        }
-    }, [policy, loadRequestById]);
-
-    useEffect(() => {
-        loadHolderDid();
-    }, [loadHolderDid]);
-
-    const generateAndSend = useCallback(async () => {
-        if (!req) return;
-        if (!BASE_URL) return notify("Error", "Missing EXPO_PUBLIC_API_BASE_URL");
-
-        if (req.status !== "open" || isExpired(req.expiresAt)) {
-            notify("Request", "This request is not open anymore (closed/expired).");
-            return;
-        }
-
-        if (requiredTypes.length) {
-            const selectedVCs = vcs.filter((x) => selected[x.hash]);
-            const haveTypes = new Set(selectedVCs.map((x) => x.title));
-            const miss = requiredTypes.filter((t) => !haveTypes.has(t));
-            if (miss.length) {
-                notify("Missing credentials", `Select credentials for: ${miss.join(", ")}`);
-                return;
-            }
-        }
-
-        const vcHashes = Object.keys(selected).filter((h) => selected[h]);
-        if (!vcHashes.length) {
-            notify("Select", "Select at least one credential.");
-            return;
-        }
-
-        if (!holderDid.trim()) {
-            notify("Holder DID", "Missing holder DID.");
-            return;
-        }
-
-        setSending(true);
-        setResult(null);
-
-        try {
             const sess = await loadLastWallet();
             if (!sess?.profileName || !sess?.passphrase) {
                 navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
                 return;
             }
+
+            const pr = await startProofSessionFixed();
+            setReq(pr);
+
+            if (pr.status !== "open" || isExpired(pr.expiresAt)) {
+                throw new Error("request_not_open_or_expired");
+            }
+
+            const vcHashes = Object.keys(selected).filter((h) => selected[h]);
+            if (!vcHashes.length) throw new Error("no_credentials_selected");
 
             const vpResp = await fetch(`${BASE_URL}/wallets/vps/create`, {
                 method: "POST",
@@ -317,8 +249,8 @@ export default function ProofRequestScreen() {
                     passphrase: sess.passphrase,
                     holderDid: holderDid.trim(),
                     vcHashes,
-                    challenge: req.nonce,
-                    domain: req.policy,
+                    challenge: pr.nonce,
+                    domain: pr.policy,
                 }),
             });
 
@@ -330,7 +262,7 @@ export default function ProofRequestScreen() {
             const vpJwt = vpJson.vpJwt ? String(vpJson.vpJwt) : "";
             const vpHash = vpJson.hash ? String(vpJson.hash) : "";
 
-            const subResp = await fetch(`${BASE_URL}/proof-requests/${encodeURIComponent(req.id)}/submit`, {
+            const subResp = await fetch(`${BASE_URL}/proof-requests/${encodeURIComponent(pr.id)}/submit`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -346,19 +278,29 @@ export default function ProofRequestScreen() {
             setResult({ ok: true, msg: String(subJson.status || "accepted") });
             notify("Sent", "Proof submitted.");
         } catch (e: any) {
-            setResult({ ok: false, msg: e?.message || "failed" });
-            notify("Error", e?.message || "Could not generate/send proof");
+            const msg = String(e?.message || e);
+
+            if (msg.startsWith("wallet_missing:")) {
+                notify("Missing credentials", `Wallet is missing: ${msg.replace("wallet_missing:", "").split(",").join(", ")}`);
+            } else if (msg.startsWith("select_required:")) {
+                notify("Select required", `Select credentials for: ${msg.replace("select_required:", "").split(",").join(", ")}`);
+            } else if (msg === "missing_holder_token") {
+                notify("Not connected", "Missing holder token. Do pairing/connect first.");
+            } else {
+                notify("Error", msg || "Could not generate/send proof");
+            }
+
+            setResult({ ok: false, msg });
+            setReqErr(msg);
         } finally {
             setSending(false);
         }
-    }, [req, requiredTypes, selected, vcs, holderDid, navigation]);
+    }, [holderDid, missingRequired, missingSelection, selected, navigation]);
 
-    const listForDisplay = useMemo(() => {
-        if (!requiredTypes.length) return vcs;
-        const a = vcs.filter((x) => requiredTypes.includes(x.title));
-        const b = vcs.filter((x) => !requiredTypes.includes(x.title));
-        return [...a, ...b];
-    }, [vcs, requiredTypes]);
+    useEffect(() => {
+        loadHolderDid();
+        loadVcs();
+    }, [loadHolderDid, loadVcs]);
 
     return (
         <SafeAreaView
@@ -374,94 +316,51 @@ export default function ProofRequestScreen() {
                     <View style={styles.topRight} />
                 </View>
 
-                <Text style={styles.label}>Start request</Text>
-                <View style={styles.inputRow}>
-                    <TextInput
-                        value={policy}
-                        onChangeText={setPolicy}
-                        placeholder="office_entry"
-                        placeholderTextColor={COLORS.subtle}
-                        style={[styles.input, { flex: 1 }]}
-                        autoCapitalize="none"
-                        autoCorrect={false}
-                    />
-                    <Pressable
-                        onPress={startRequest}
-                        disabled={starting}
-                        style={[styles.smallBtn, starting && { opacity: 0.6 }]}
-                    >
-                        <Text style={styles.smallBtnText}>{starting ? "..." : "Start"}</Text>
-                    </Pressable>
+                <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Required credentials</Text>
+                    <View style={[styles.chipsRow, { marginTop: 8 }]}>
+                        {REQUIRED_TYPES.map((t) => (
+                            <View key={t} style={styles.chip}>
+                                <Text style={styles.chipText}>{t}</Text>
+                            </View>
+                        ))}
+                    </View>
+
+                    {missingRequired.length ? (
+                        <Text style={[styles.err, { marginTop: 10 }]}>
+                            Wallet missing: {missingRequired.join(", ")}
+                        </Text>
+                    ) : null}
+
+                    {!missingRequired.length && missingSelection.length ? (
+                        <Text style={[styles.err, { marginTop: 10 }]}>
+                            Select: {missingSelection.join(", ")}
+                        </Text>
+                    ) : null}
                 </View>
 
                 {reqErr ? <Text style={styles.err}>{reqErr}</Text> : null}
 
-                {reqLoading ? (
-                    <Text style={{ color: COLORS.subtle, marginTop: 10 }}>Loading request...</Text>
-                ) : null}
-
                 {req ? (
                     <View style={styles.card}>
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", gap: 10 }}>
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.cardTitle}>{req.policy}</Text>
-                                <Text style={styles.cardSub}>
-                                    {req.requesterId ? `By: ${req.requesterId}` : "By: -"} · {String(req.status).toUpperCase()}
-                                </Text>
-                            </View>
-                            <View style={{ alignItems: "flex-end" }}>
-                                <Text style={styles.cardSub}>Expires</Text>
-                                <Text style={[styles.mono, { fontSize: 12 }]}>{fmtDateTime(req.expiresAt)}</Text>
-                            </View>
-                        </View>
-
-                        {expires ? <Text style={[styles.err, { marginTop: 8 }]}>Expired.</Text> : null}
-
-                        {(requiredTypes.length || requiredRules.length) ? (
-                            <View style={{ marginTop: 10 }}>
-                                {requiredTypes.length ? (
-                                    <>
-                                        <Text style={styles.sectionLabel}>Needs</Text>
-                                        <View style={styles.chipsRow}>
-                                            {requiredTypes.map((t) => (
-                                                <View key={t} style={styles.chip}>
-                                                    <Text style={styles.chipText}>{t}</Text>
-                                                </View>
-                                            ))}
-                                        </View>
-                                    </>
-                                ) : null}
-
-                                {requiredRules.length ? (
-                                    <>
-                                        <Text style={[styles.sectionLabel, { marginTop: 10 }]}>Rules</Text>
-                                        {requiredRules.map((r) => (
-                                            <Text key={r} style={styles.rule}>
-                                                • {r}
-                                            </Text>
-                                        ))}
-                                    </>
-                                ) : null}
-
-                                {missingRequired.length ? (
-                                    <Text style={[styles.err, { marginTop: 10 }]}>
-                                        Missing: {missingRequired.join(", ")}
-                                    </Text>
-                                ) : null}
-                            </View>
-                        ) : null}
+                        <Text style={styles.cardTitle}>Session</Text>
+                        <Text style={styles.cardSub}>policy: {req.policy}</Text>
+                        <Text style={styles.cardSub}>status: {String(req.status).toUpperCase()}</Text>
+                        <Text style={styles.cardSub}>expires: {fmtDateTime(req.expiresAt)}</Text>
+                        <Text style={[styles.cardSub, { marginTop: 6 }]} numberOfLines={1}>
+                            id: {req.id}
+                        </Text>
                     </View>
                 ) : null}
 
                 <Text style={styles.label}>Holder DID</Text>
                 <TextInput
                     value={holderDid}
-                    onChangeText={setHolderDid}
+                    editable={false}
+                    selectTextOnFocus={false}
                     placeholder="did:..."
                     placeholderTextColor={COLORS.subtle}
-                    style={styles.input}
-                    autoCapitalize="none"
-                    autoCorrect={false}
+                    style={[styles.input, { opacity: 0.9 }]}
                 />
 
                 <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
@@ -507,12 +406,9 @@ export default function ProofRequestScreen() {
                 />
 
                 <Pressable
-                    disabled={!canSend || !selectedHashes.length}
+                    disabled={!canSend}
                     onPress={generateAndSend}
-                    style={[
-                        styles.primaryBtn,
-                        (!canSend || !selectedHashes.length) && { opacity: 0.6 },
-                    ]}
+                    style={[styles.primaryBtn, !canSend && { opacity: 0.6 }]}
                 >
                     {sending ? (
                         <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
