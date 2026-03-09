@@ -6,12 +6,13 @@ include "../node_modules/circomlib/circuits/comparators.circom";
 template IncomeRange() {
   
   signal input income;
-  signal input salt;
+  signal input saltIncome; 
 
+  signal input incomeCommit;
   signal input L;
   signal input U;
   
-  signal output privHash;
+  signal output incomePrivHash;
   signal output inRange;
   signal output policyOk;
 
@@ -21,8 +22,10 @@ template IncomeRange() {
 
   component h = Poseidon(2);
   h.inputs[0] <== income;
-  h.inputs[1] <== salt;
-  privHash <== h.out;
+  h.inputs[1] <== saltIncome;
+
+  incomePrivHash <== h.out;
+  incomeCommit === h.out;
 
   component ltLU = LessThan(32);
   ltLU.in[0] <== L;

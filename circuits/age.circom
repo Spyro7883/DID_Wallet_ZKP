@@ -6,9 +6,11 @@ include "../node_modules/circomlib/circuits/comparators.circom";
 
 template AgeVerification() {
     signal input age;
-    signal input salt;
+    signal input saltAge;
 
-    signal output privHash;
+    signal input ageCommit;
+
+    signal output agePrivHash;
     signal output isEligible;
 
     component ageBits = Num2Bits(8);
@@ -16,8 +18,11 @@ template AgeVerification() {
 
     component h = Poseidon(2);
     h.inputs[0] <== age;
-    h.inputs[1] <== salt;
-    privHash <== h.out;
+    h.inputs[1] <== saltAge;
+
+    agePrivHash <== h.out;
+
+    ageCommit === h.out;
 
     component cmp = GreaterEqThan(8);
     cmp.in[0] <== age;

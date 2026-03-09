@@ -6,10 +6,12 @@ include "../node_modules/circomlib/circuits/comparators.circom";
 
 template CitizenshipVerification() {    
     signal input citizenship; 
-    signal input salt;
+    signal input saltCit; 
+
+    signal input citizenshipCommit; 
     signal input expectedCitizenship;
 
-    signal output privHash;
+    signal output citizenshipPrivHash;
     signal output isEligible;
 
     component cBits  = Num2Bits(16); cBits.in  <== citizenship;
@@ -17,8 +19,10 @@ template CitizenshipVerification() {
 
     component h = Poseidon(2);
     h.inputs[0] <== citizenship;
-    h.inputs[1] <== salt;
-    privHash <== h.out;
+    h.inputs[1] <== saltCit;
+
+    citizenshipPrivHash <== h.out;
+    citizenshipCommit === h.out;
 
     signal diff;
     diff <== citizenship - expectedCitizenship;

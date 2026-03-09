@@ -15,9 +15,16 @@ import {
 } from "react-native";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
-import { loadLastWallet, saveLastVcRequest, loadLastVcRequest } from "../src/storage/walletSession";
+import { SafeAreaView } from "react-native-safe-area-context";
+import * as SecureStore from "expo-secure-store";
+import * as Random from "expo-random";
+import * as circomlibjs from "circomlibjs";
 
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+    loadLastWallet,
+    saveLastVcRequest,
+    loadLastVcRequest,
+} from "../src/storage/walletSession";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
@@ -56,35 +63,126 @@ async function readJsonSafe(resp: Response) {
     }
 }
 
-function validateClaimsForType(t: VCType, claims: Record<string, any>) {
-    if (t === "CitizenshipCredential") {
-        const c = String(claims.citizenship || "").toUpperCase();
-        if (!/^[A-Z]{2}$/.test(c)) throw new Error("citizenship must be 2 letters (e.g. RO)");
-        claims.citizenship = c;
-    }
-
-    if (t === "AgeCredential") {
-        const dob = String(claims.dateOfBirth || "");
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) throw new Error("dateOfBirth must be YYYY-MM-DD");
-    }
-
-    if (t === "IncomeCredential") {
-        const min = Number(claims.incomeMin);
-        const max = Number(claims.incomeMax);
-        const cur = String(claims.currency || "").toUpperCase();
-        if (!Number.isFinite(min) || !Number.isFinite(max)) throw new Error("incomeMin/incomeMax must be numbers");
-        if (min > max) throw new Error("incomeMin must be <= incomeMax");
-        if (!/^[A-Z]{3}$/.test(cur)) throw new Error("currency must be 3 letters (e.g. RON)");
-        claims.incomeMin = min;
-        claims.incomeMax = max;
-        claims.currency = cur;
-    }
-}
-
 function short(s: string, head = 10, tail = 6) {
     const v = String(s || "");
     if (v.length <= head + tail + 3) return v;
     return `${v.slice(0, head)}...${v.slice(-tail)}`;
+}
+
+let _poseidon: any | null = null;
+
+async function getPoseidon() {
+    if (_poseidon) return _poseidon;
+    _poseidon = await (circomlibjs as any).buildPoseidon();
+    return _poseidon;
+}
+
+async function poseidon2(a: bigint, b: bigint): Promise<string> {
+    const p = await getPoseidon();
+    const out = p([a, b]);
+    return p.F.toString(out);
+}
+
+async function randomSalt31(): Promise<bigint> {
+    const bytes = await Random.getRandomBytesAsync(31);
+    const hex = Array.from(bytes)
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join("");
+    return BigInt("0x" + hex);
+}
+
+async function saveSecretByCommit(
+    kind: "age" | "cit" | "income",
+    commit: string,
+    payload: any,
+) {
+    await SecureStore.setItemAsync(`zk:${kind}:${commit}`, JSON.stringify(payload));
+}
+
+function calcAgeYears(dobIso: string): number {
+    const [y, m, d] = String(dobIso || "").split("-").map(Number);
+    if (!y || !m || !d) {
+        throw new Error("dateOfBirth must be YYYY-MM-DD");
+    }
+
+    const dob = new Date(y, m - 1, d);
+    const now = new Date();
+
+    let age = now.getFullYear() - dob.getFullYear();
+    const beforeBirthday =
+        now.getMonth() < dob.getMonth() ||
+        (now.getMonth() === dob.getMonth() && now.getDate() < dob.getDate());
+
+    if (beforeBirthday) age -= 1;
+
+    if (age < 0 || age > 255) {
+        throw new Error("derived age out of range");
+    }
+
+    return age;
+}
+
+function alpha2ToNumericDemo(code: string): bigint {
+    const c = String(code || "").toUpperCase().trim();
+
+    if (c === "RO") return 642n;
+
+    throw new Error("Only RO is supported for now");
+}
+
+async function buildAgeClaims(dateOfBirth: string) {
+    const age = calcAgeYears(dateOfBirth);
+    const saltAge = await randomSalt31();
+    const ageCommit = await poseidon2(BigInt(age), saltAge);
+
+    await saveSecretByCommit("age", ageCommit, {
+        age,
+        saltAge: saltAge.toString(),
+        dateOfBirth,
+    });
+
+    return { ageCommit };
+}
+
+async function buildCitizenshipClaims(citizenship: string) {
+    const citizenshipNum = alpha2ToNumericDemo(citizenship);
+    const saltCit = await randomSalt31();
+    const citizenshipCommit = await poseidon2(citizenshipNum, saltCit);
+
+    await saveSecretByCommit("cit", citizenshipCommit, {
+        citizenship: citizenshipNum.toString(),
+        saltCit: saltCit.toString(),
+        citizenshipAlpha2: String(citizenship).toUpperCase().trim(),
+    });
+
+    return { citizenshipCommit };
+}
+
+async function buildIncomeClaims(incomeText: string, currency: string) {
+    const incomeNum = Number(incomeText);
+    const cur = String(currency || "").toUpperCase().trim();
+
+    if (!Number.isFinite(incomeNum)) {
+        throw new Error("income must be a number");
+    }
+    if (incomeNum < 0) {
+        throw new Error("income must be >= 0");
+    }
+    if (!/^[A-Z]{3}$/.test(cur)) {
+        throw new Error("currency must be 3 letters (e.g. RON)");
+    }
+
+    const income = BigInt(Math.trunc(incomeNum));
+    const saltIncome = await randomSalt31();
+    const incomeCommit = await poseidon2(income, saltIncome);
+
+    await saveSecretByCommit("income", incomeCommit, {
+        income: income.toString(),
+        saltIncome: saltIncome.toString(),
+        currency: cur,
+    });
+
+    return { incomeCommit, currency: cur };
 }
 
 export default function CreateCredentialScreen() {
@@ -96,8 +194,7 @@ export default function CreateCredentialScreen() {
 
     const [citizenship, setCitizenship] = useState("RO");
     const [dob, setDob] = useState("1999-01-01");
-    const [incomeMin, setIncomeMin] = useState("1000");
-    const [incomeMax, setIncomeMax] = useState("3000");
+    const [income, setIncome] = useState("3000");
     const [currency, setCurrency] = useState("RON");
 
     const [requestId, setRequestId] = useState<number | null>(null);
@@ -113,7 +210,6 @@ export default function CreateCredentialScreen() {
 
     const syncingRef = useRef(false);
     const importedReqIdsRef = useRef<Set<number>>(new Set());
-
     const pinnedReqIdRef = useRef<number | null>(null);
 
     const selectedReq = useMemo(
@@ -121,7 +217,10 @@ export default function CreateCredentialScreen() {
         [requests, requestId],
     );
 
-    const pendingCount = useMemo(() => requests.filter((r) => r.status === "pending").length, [requests]);
+    const pendingCount = useMemo(
+        () => requests.filter((r) => r.status === "pending").length,
+        [requests],
+    );
 
     const TYPES: { label: string; value: VCType }[] = [
         { label: "Citizenship", value: "CitizenshipCredential" },
@@ -129,14 +228,15 @@ export default function CreateCredentialScreen() {
         { label: "Income", value: "IncomeCredential" },
     ];
 
-    const insets = useSafeAreaInsets();
-
     useEffect(() => {
-        if (type === "CitizenshipCredential") setCitizenship("RO");
-        if (type === "AgeCredential") setDob("1999-01-01");
+        if (type === "CitizenshipCredential") {
+            setCitizenship("RO");
+        }
+        if (type === "AgeCredential") {
+            setDob("1999-01-01");
+        }
         if (type === "IncomeCredential") {
-            setIncomeMin("1000");
-            setIncomeMax("3000");
+            setIncome("3000");
             setCurrency("RON");
         }
     }, [type]);
@@ -150,18 +250,28 @@ export default function CreateCredentialScreen() {
                 const resp = await fetch(`${BASE_URL}/wallets/summary`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ profile: sess.profileName, passphrase: sess.passphrase, limit: 1 }),
+                    body: JSON.stringify({
+                        profile: sess.profileName,
+                        passphrase: sess.passphrase,
+                        limit: 1,
+                    }),
                 });
                 const json = await resp.json();
-                if (resp.ok && json?.ok && json.activeDid) setSubjectDid(String(json.activeDid));
+                if (resp.ok && json?.ok && json.activeDid) {
+                    setSubjectDid(String(json.activeDid));
+                }
             } catch { }
         })();
     }, []);
 
     const importIssuedVc = useCallback(async (vcJwt: string) => {
         const sess = await loadLastWallet();
-        if (!sess?.profileName || !sess?.passphrase) throw new Error("missing_session");
-        if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+        if (!sess?.profileName || !sess?.passphrase) {
+            throw new Error("missing_session");
+        }
+        if (!BASE_URL) {
+            throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+        }
 
         const r = await fetch(`${BASE_URL}/wallets/vcs/save`, {
             method: "POST",
@@ -181,6 +291,7 @@ export default function CreateCredentialScreen() {
 
     const syncRequests = useCallback(async () => {
         if (syncingRef.current) return;
+
         syncingRef.current = true;
         setSyncing(true);
 
@@ -195,8 +306,12 @@ export default function CreateCredentialScreen() {
             });
 
             const { json, text } = await readJsonSafe(resp);
-            if (!resp.ok) throw new Error((json && (json.error || json.message)) || text || `HTTP ${resp.status}`);
-            if (!json?.ok || !Array.isArray(json.items)) throw new Error("bad_list_response");
+            if (!resp.ok) {
+                throw new Error((json && (json.error || json.message)) || text || `HTTP ${resp.status}`);
+            }
+            if (!json?.ok || !Array.isArray(json.items)) {
+                throw new Error("bad_list_response");
+            }
 
             const items = json.items as VcRequestDetail[];
             setRequests(items);
@@ -205,6 +320,7 @@ export default function CreateCredentialScreen() {
 
             if (!requestId) {
                 const last = await loadLastVcRequest(sess.profileName).catch(() => null);
+
                 const fallback =
                     pendingId ||
                     (last && items.find((x) => x.id === last)?.id) ||
@@ -219,7 +335,9 @@ export default function CreateCredentialScreen() {
                 const current = items.find((x) => x.id === requestId) || null;
 
                 if (!current) {
-                    if (pinnedReqIdRef.current === requestId) pinnedReqIdRef.current = null;
+                    if (pinnedReqIdRef.current === requestId) {
+                        pinnedReqIdRef.current = null;
+                    }
 
                     const next = pendingId || items[0]?.id || null;
                     if (next) {
@@ -269,22 +387,39 @@ export default function CreateCredentialScreen() {
                 navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
                 return;
             }
-            if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+            if (!BASE_URL) {
+                throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
+            }
 
             const holderToken = sess.holderToken;
-            if (!holderToken) throw new Error("Missing holderToken. Pair first.");
+            if (!holderToken) {
+                throw new Error("Missing holderToken. Pair first.");
+            }
 
             const days = Number(validDays || "0");
-            if (!Number.isFinite(days) || days <= 0) throw new Error("validityDays must be > 0");
+            if (!Number.isFinite(days) || days <= 0) {
+                throw new Error("validityDays must be > 0");
+            }
 
             let claims: any = {};
-            if (type === "CitizenshipCredential") claims = { citizenship };
-            if (type === "AgeCredential") claims = { dateOfBirth: dob };
-            if (type === "IncomeCredential") claims = { incomeMin, incomeMax, currency };
 
-            validateClaimsForType(type, claims);
+            if (type === "AgeCredential") {
+                claims = await buildAgeClaims(dob);
+            }
 
-            const body = { type, validityDays: days, claims };
+            if (type === "CitizenshipCredential") {
+                claims = await buildCitizenshipClaims(citizenship);
+            }
+
+            if (type === "IncomeCredential") {
+                claims = await buildIncomeClaims(income, currency);
+            }
+
+            const body = {
+                type,
+                validityDays: days,
+                claims,
+            };
 
             const resp = await fetch(`${BASE_URL}/vc/requests`, {
                 method: "POST",
@@ -301,7 +436,9 @@ export default function CreateCredentialScreen() {
             }
 
             const id = Number(json.request?.id);
-            if (!Number.isFinite(id)) throw new Error("bad_request_id");
+            if (!Number.isFinite(id)) {
+                throw new Error("bad_request_id");
+            }
 
             pinnedReqIdRef.current = null;
 
@@ -316,7 +453,16 @@ export default function CreateCredentialScreen() {
         } finally {
             setLoading(false);
         }
-    }, [navigation, validDays, type, citizenship, dob, incomeMin, incomeMax, currency, syncRequests]);
+    }, [
+        navigation,
+        validDays,
+        type,
+        citizenship,
+        dob,
+        income,
+        currency,
+        syncRequests,
+    ]);
 
     const statusLabel =
         selectedReq?.status === "approved"
@@ -337,7 +483,7 @@ export default function CreateCredentialScreen() {
             : 12;
 
     return (
-        <SafeAreaView style={[styles.container, { paddingTop: TOP_PAD }]} >
+        <SafeAreaView style={[styles.container, { paddingTop: TOP_PAD }]}>
             <ScrollView
                 contentContainerStyle={{ paddingBottom: 24 }}
                 keyboardShouldPersistTaps="handled"
@@ -424,7 +570,8 @@ export default function CreateCredentialScreen() {
                                 >
                                     <Text style={styles.reqRowTitle}>#{item.id} · {item.vcType}</Text>
                                     <Text style={styles.reqRowSub}>
-                                        {String(item.status).toUpperCase()} · {String(item.createdAt || "").slice(0, 16).replace("T", " ")}
+                                        {String(item.status).toUpperCase()} ·{" "}
+                                        {String(item.createdAt || "").slice(0, 16).replace("T", " ")}
                                     </Text>
                                 </Pressable>
                             )}
@@ -510,42 +657,43 @@ export default function CreateCredentialScreen() {
                 <Text style={styles.label}>Claims</Text>
 
                 {type === "CitizenshipCredential" && (
-                    <TextInput
-                        value={citizenship}
-                        onChangeText={setCitizenship}
-                        placeholder="RO"
-                        placeholderTextColor="#6B7280"
-                        style={styles.input}
-                        autoCapitalize="characters"
-                    />
+                    <>
+                        <TextInput
+                            value={citizenship}
+                            onChangeText={setCitizenship}
+                            placeholder="RO"
+                            placeholderTextColor="#6B7280"
+                            style={styles.input}
+                            autoCapitalize="characters"
+                        />
+                        <Text style={styles.helperText}>
+                            On submit, the app computes a commitment and sends only the commitment.
+                        </Text>
+                    </>
                 )}
 
                 {type === "AgeCredential" && (
-                    <TextInput
-                        value={dob}
-                        onChangeText={setDob}
-                        placeholder="YYYY-MM-DD"
-                        placeholderTextColor="#6B7280"
-                        style={styles.input}
-                        autoCapitalize="none"
-                    />
+                    <>
+                        <TextInput
+                            value={dob}
+                            onChangeText={setDob}
+                            placeholder="YYYY-MM-DD"
+                            placeholderTextColor="#6B7280"
+                            style={styles.input}
+                            autoCapitalize="none"
+                        />
+                        <Text style={styles.helperText}>
+                            DOB stays local. The app derives age and sends only the commitment.
+                        </Text>
+                    </>
                 )}
 
                 {type === "IncomeCredential" && (
                     <>
                         <TextInput
-                            value={incomeMin}
-                            onChangeText={setIncomeMin}
-                            placeholder="incomeMin"
-                            placeholderTextColor="#6B7280"
-                            style={styles.input}
-                            keyboardType="number-pad"
-                        />
-                        <View style={{ height: 8 }} />
-                        <TextInput
-                            value={incomeMax}
-                            onChangeText={setIncomeMax}
-                            placeholder="incomeMax"
+                            value={income}
+                            onChangeText={setIncome}
+                            placeholder="income"
                             placeholderTextColor="#6B7280"
                             style={styles.input}
                             keyboardType="number-pad"
@@ -559,6 +707,9 @@ export default function CreateCredentialScreen() {
                             style={styles.input}
                             autoCapitalize="characters"
                         />
+                        <Text style={styles.helperText}>
+                            The app sends only `incomeCommit` and optional currency.
+                        </Text>
                     </>
                 )}
 
@@ -683,6 +834,13 @@ const styles = StyleSheet.create({
         backgroundColor: "rgba(255,255,255,0.06)",
         fontSize: 14,
         ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
+    },
+
+    helperText: {
+        color: "#9CA3AF",
+        marginTop: 6,
+        fontSize: 11,
+        lineHeight: 16,
     },
 
     typePill: {

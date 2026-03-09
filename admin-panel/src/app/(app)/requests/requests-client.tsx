@@ -17,6 +17,7 @@ import {
     DialogContent,
     DialogActions,
     MenuItem,
+    Collapse,
 } from "@mui/material";
 import { api } from "@/lib/api";
 
@@ -33,11 +34,17 @@ type ProofReqDetail = {
     id: string;
     status: string;
     policy: string;
-    requesterId: string | null;
+    requester_id: string | null;
     nonce: string;
     constraints: any;
-    expiresAt: string;
-    createdAt: string;
+    expires_at: string;
+    created_at: string;
+
+    submitted_at?: string | null;
+    holder_did?: string | null;
+    vp_hash?: string | null;
+    result?: string | null;
+    error?: string | null;
 };
 
 function pretty(v: any) {
@@ -54,6 +61,28 @@ function statusChip(st: string) {
     if (s === "closed") return <Chip size="small" label="closed" color="warning" variant="outlined" />;
     if (s === "expired") return <Chip size="small" label="expired" color="error" variant="outlined" />;
     return <Chip size="small" label={s || "unknown"} variant="outlined" />;
+}
+
+function resultChip(result?: string | null, error?: string | null) {
+    const r = String(result || "").toLowerCase();
+    if (!r) return null;
+    if (r === "accepted") return <Chip size="small" label="accepted" color="success" variant="outlined" />;
+    if (r === "rejected")
+        return (
+            <Chip
+                size="small"
+                label={error ? `rejected: ${error}` : "rejected"}
+                color="error"
+                variant="outlined"
+            />
+        );
+    return <Chip size="small" label={r} variant="outlined" />;
+}
+
+function extractLists(constraints: any) {
+    const vcTypes = Array.isArray(constraints?.vcTypes) ? constraints.vcTypes.map(String) : [];
+    const rules = Array.isArray(constraints?.rules) ? constraints.rules.map(String) : [];
+    return { vcTypes, rules };
 }
 
 export default function RequestsClient() {
@@ -75,6 +104,7 @@ export default function RequestsClient() {
     const [selectedId, setSelectedId] = React.useState<string>("");
     const [detail, setDetail] = React.useState<ProofReqDetail | null>(null);
     const [loadingDetail, setLoadingDetail] = React.useState(false);
+    const [showRaw, setShowRaw] = React.useState(false);
 
     const copy = (v: string) => navigator.clipboard.writeText(v);
 
@@ -113,11 +143,12 @@ export default function RequestsClient() {
         setSelectedId(id);
         setDetail(null);
         setLoadingDetail(true);
+        setShowRaw(false);
         setErr("");
 
         try {
             const res = await api<{ ok: boolean; request: ProofReqDetail }>(
-                `/proof-requests/${encodeURIComponent(id)}`,
+                `/admin/proof-requests/${encodeURIComponent(id)}`,
             );
             setDetail(res.request);
         } catch (e: any) {
@@ -131,16 +162,11 @@ export default function RequestsClient() {
     const publicLinkFor = (id: string) =>
         `${String(API_BASE).replace(/\/$/, "")}/proof-requests/${encodeURIComponent(id)}`;
 
+    const { vcTypes, rules } = React.useMemo(() => extractLists(detail?.constraints), [detail?.constraints]);
+
     return (
         <Box>
-            <Stack
-                direction="row"
-                justifyContent="space-between"
-                alignItems="center"
-                mb={2}
-                gap={2}
-                flexWrap="wrap"
-            >
+            <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2} gap={2} flexWrap="wrap">
                 <Box>
                     <Typography variant="h4" fontWeight={800}>
                         Proof Requests
@@ -187,11 +213,7 @@ export default function RequestsClient() {
                             sx={{ minWidth: 320, flex: 1 }}
                         />
 
-                        <Chip
-                            label={`${filtered.length} shown / ${items.length} total`}
-                            size="small"
-                            variant="outlined"
-                        />
+                        <Chip label={`${filtered.length} shown / ${items.length} total`} size="small" variant="outlined" />
                     </Stack>
                 </CardContent>
             </Card>
@@ -225,22 +247,13 @@ export default function RequestsClient() {
                                         {statusChip(r.status)}
                                     </Stack>
 
-                                    <Typography
-                                        variant="caption"
-                                        color="text.secondary"
-                                        sx={{ wordBreak: "break-all" }}
-                                    >
-                                        {r.id} · exp {String(r.expires_at).slice(0, 19)} ·{" "}
-                                        {r.requester_id || "-"}
+                                    <Typography variant="caption" color="text.secondary" sx={{ wordBreak: "break-all" }}>
+                                        {r.id} · exp {String(r.expires_at).slice(0, 19)} · {r.requester_id || "-"}
                                     </Typography>
                                 </Box>
 
                                 <Stack direction="row" spacing={1} flexShrink={0}>
-                                    <Button
-                                        size="small"
-                                        variant="outlined"
-                                        onClick={() => copy(publicLinkFor(r.id))}
-                                    >
+                                    <Button size="small" variant="outlined" onClick={() => copy(publicLinkFor(r.id))}>
                                         Copy link
                                     </Button>
                                     <Button size="small" variant="contained" onClick={() => openDetails(r.id)}>
@@ -273,26 +286,40 @@ export default function RequestsClient() {
                                         {detail.id}
                                     </Typography>
                                 </Box>
-                                <Box sx={{ display: "flex", alignItems: "flex-end", gap: 1 }}>
+                                <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
                                     {statusChip(detail.status)}
-                                </Box>
+                                    {resultChip(detail.result, detail.error)}
+                                </Stack>
                             </Stack>
 
                             <Divider />
 
-                            <Stack direction="row" gap={2} flexWrap="wrap">
+                            <Stack direction="row" gap={1} flexWrap="wrap">
                                 <Chip label={`policy: ${detail.policy}`} size="small" variant="outlined" />
-                                <Chip
-                                    label={`requester: ${detail.requesterId ?? "-"}`}
-                                    size="small"
-                                    variant="outlined"
-                                />
-                                <Chip
-                                    label={`expires: ${String(detail.expiresAt).slice(0, 19)}`}
-                                    size="small"
-                                    variant="outlined"
-                                />
+                                <Chip label={`requester: ${detail.requester_id ?? "-"}`} size="small" variant="outlined" />
+                                <Chip label={`expires: ${String(detail.expires_at).slice(0, 19)}`} size="small" variant="outlined" />
+                                {detail.submitted_at ? (
+                                    <Chip label={`submitted: ${String(detail.submitted_at).slice(0, 19)}`} size="small" variant="outlined" />
+                                ) : null}
                             </Stack>
+
+                            {detail.holder_did ? (
+                                <TextField
+                                    label="Holder DID"
+                                    value={detail.holder_did}
+                                    fullWidth
+                                    InputProps={{ readOnly: true } as any}
+                                />
+                            ) : null}
+
+                            {detail.vp_hash ? (
+                                <TextField
+                                    label="VP hash"
+                                    value={detail.vp_hash}
+                                    fullWidth
+                                    InputProps={{ readOnly: true } as any}
+                                />
+                            ) : null}
 
                             <TextField
                                 label="Public link"
@@ -301,25 +328,45 @@ export default function RequestsClient() {
                                 InputProps={{ readOnly: true } as any}
                             />
 
-                            <TextField
-                                label="Nonce"
-                                value={detail.nonce}
-                                fullWidth
-                                InputProps={{ readOnly: true } as any}
-                            />
+                            <Stack direction="row" gap={1} flexWrap="wrap">
+                                {vcTypes.length ? <Chip label="vcTypes" size="small" variant="outlined" /> : null}
+                                {vcTypes.map((t) => (
+                                    <Chip key={t} label={t} size="small" />
+                                ))}
+                            </Stack>
 
-                            <TextField
-                                label="Constraints"
-                                value={pretty(detail.constraints)}
-                                fullWidth
-                                multiline
-                                minRows={8}
-                                InputProps={{ readOnly: true } as any}
-                            />
+                            <Stack direction="row" gap={1} flexWrap="wrap">
+                                {rules.length ? <Chip label="rules" size="small" variant="outlined" /> : null}
+                                {rules.map((r) => (
+                                    <Chip key={r} label={r} size="small" />
+                                ))}
+                            </Stack>
 
-                            <Typography variant="caption" color="text.secondary">
-                                createdAt: {String(detail.createdAt)} · expiresAt: {String(detail.expiresAt)}
-                            </Typography>
+                            <Button variant="text" onClick={() => setShowRaw((x) => !x)} sx={{ alignSelf: "flex-start" }}>
+                                {showRaw ? "Hide raw" : "Show raw"}
+                            </Button>
+
+                            <Collapse in={showRaw} unmountOnExit>
+                                <TextField
+                                    label="Nonce"
+                                    value={detail.nonce}
+                                    fullWidth
+                                    InputProps={{ readOnly: true } as any}
+                                    sx={{ mt: 1 }}
+                                />
+                                <TextField
+                                    label="Constraints (raw)"
+                                    value={pretty(detail.constraints)}
+                                    fullWidth
+                                    multiline
+                                    minRows={8}
+                                    InputProps={{ readOnly: true } as any}
+                                    sx={{ mt: 2 }}
+                                />
+                                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: "block" }}>
+                                    createdAt: {String(detail.created_at)} · expiresAt: {String(detail.expires_at)}
+                                </Typography>
+                            </Collapse>
                         </Stack>
                     ) : (
                         <Typography color="text.secondary">No data.</Typography>
@@ -327,18 +374,10 @@ export default function RequestsClient() {
                 </DialogContent>
                 <DialogActions>
                     <Button onClick={() => setOpen(false)}>Close</Button>
-                    <Button
-                        variant="outlined"
-                        onClick={() => copy(publicLinkFor(selectedId))}
-                        disabled={!selectedId}
-                    >
+                    <Button variant="outlined" onClick={() => copy(publicLinkFor(selectedId))} disabled={!selectedId}>
                         Copy link
                     </Button>
-                    <Button
-                        variant="outlined"
-                        onClick={() => copy(String(selectedId))}
-                        disabled={!selectedId}
-                    >
+                    <Button variant="outlined" onClick={() => copy(String(selectedId))} disabled={!selectedId}>
                         Copy id
                     </Button>
                 </DialogActions>

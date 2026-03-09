@@ -705,28 +705,29 @@ app.post("/connect/confirm", async (req, res) => {
 
 const VC_POLICY: Record<
   string,
-  {
-    allowedClaims: string[];
-    requiredClaims: string[];
-    maxValidityDays: number;
-  }
+  { allowedClaims: string[]; requiredClaims: string[]; maxValidityDays: number }
 > = {
   AgeCredential: {
-    allowedClaims: ["dateOfBirth"],
-    requiredClaims: ["dateOfBirth"],
+    allowedClaims: ["ageCommit"],
+    requiredClaims: ["ageCommit"],
     maxValidityDays: 3650,
   },
   CitizenshipCredential: {
-    allowedClaims: ["citizenship"],
-    requiredClaims: ["citizenship"],
+    allowedClaims: ["citizenshipCommit"],
+    requiredClaims: ["citizenshipCommit"],
     maxValidityDays: 3650,
   },
   IncomeCredential: {
-    allowedClaims: ["incomeMin", "incomeMax", "currency"],
-    requiredClaims: ["incomeMin", "incomeMax", "currency"],
+    allowedClaims: ["incomeCommit", "currency"],
+    requiredClaims: ["incomeCommit"],
     maxValidityDays: 365,
   },
 };
+
+const SNARK_FIELD = BigInt(
+  "0x30644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd47",
+);
+
 function pickClaims(input: any, allowed: string[]) {
   const out: Record<string, any> = {};
   for (const k of allowed) {
@@ -743,29 +744,42 @@ function assertRequired(obj: Record<string, any>, required: string[]) {
   }
 }
 
+function assertFieldEl(name: string, v: any) {
+  const s = String(v ?? "").trim();
+  if (!/^\d+$/.test(s)) throw new Error(`bad_${name}`);
+  const x = BigInt(s);
+  // 0 e permis/nu, alegi tu; eu îl resping ca să nu ai commitment 0 din greșeală
+  if (x <= 0n || x >= SNARK_FIELD) throw new Error(`bad_${name}`);
+  return s;
+}
+
 function validateClaims(mainType: string, claims: Record<string, any>) {
-  if (mainType === "CitizenshipCredential") {
-    const c = String(claims.citizenship || "").toUpperCase();
-    if (!/^[A-Z]{2}$/.test(c)) throw new Error("bad_citizenship");
-    claims.citizenship = c;
+  if (mainType === "AgeCredential") {
+    claims.ageCommit = assertFieldEl("ageCommit", claims.ageCommit);
+    return;
   }
 
-  if (mainType === "AgeCredential") {
-    const dob = String(claims.dateOfBirth || "");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dob)) throw new Error("bad_dateOfBirth");
+  if (mainType === "CitizenshipCredential") {
+    claims.citizenshipCommit = assertFieldEl(
+      "citizenshipCommit",
+      claims.citizenshipCommit,
+    );
+    return;
   }
 
   if (mainType === "IncomeCredential") {
-    const min = Number(claims.incomeMin);
-    const max = Number(claims.incomeMax);
-    const cur = String(claims.currency || "").toUpperCase();
-    if (!Number.isFinite(min) || !Number.isFinite(max))
-      throw new Error("bad_income_range");
-    if (min > max) throw new Error("income_min_gt_max");
-    if (!/^[A-Z]{3}$/.test(cur)) throw new Error("bad_currency");
-    claims.incomeMin = min;
-    claims.incomeMax = max;
-    claims.currency = cur;
+    claims.incomeCommit = assertFieldEl("incomeCommit", claims.incomeCommit);
+
+    if (
+      claims.currency !== undefined &&
+      claims.currency !== null &&
+      claims.currency !== ""
+    ) {
+      const cur = String(claims.currency).toUpperCase();
+      if (!/^[A-Z]{3}$/.test(cur)) throw new Error("bad_currency");
+      claims.currency = cur;
+    }
+    return;
   }
 }
 
@@ -1103,7 +1117,6 @@ app.post("/admin/vc/requests/:id/approve", requireAdmin, async (req, res) => {
   await qr.startTransaction();
 
   try {
-    // lock row
     const rows = await qr.query(
       `SELECT id, status, holder_did, subject_did, vc_type, claims, validity_days
        FROM public.vc_requests
@@ -1130,7 +1143,6 @@ app.post("/admin/vc/requests/:id/approve", requireAdmin, async (req, res) => {
       return res.status(400).json({ ok: false, error: "type_not_allowed" });
     }
 
-    // claims in DB are already filtered, but re-validate
     const claims = r.claims && typeof r.claims === "object" ? r.claims : {};
     try {
       assertRequired(claims, policy.requiredClaims);
