@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
     Modal,
     View,
@@ -9,6 +9,8 @@ import {
     ActivityIndicator,
     Platform,
     useColorScheme,
+    TextInput,
+    Alert,
 } from "react-native";
 import { COLORS } from "../src/theme/colors";
 
@@ -19,6 +21,7 @@ function safeJson(s: string) {
         return null;
     }
 }
+
 function pickVcOrVp(data: any) {
     if (!data) return null;
     return (
@@ -28,6 +31,29 @@ function pickVcOrVp(data: any) {
         (typeof data?.verifiablePresentation === "string" ? safeJson(data.verifiablePresentation) : null) ||
         null
     );
+}
+
+async function copyText(text: string) {
+    if (!text) return false;
+
+    if (Platform.OS === "web") {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    try {
+        const Clipboard = require("expo-clipboard");
+        if (Clipboard?.setStringAsync) {
+            await Clipboard.setStringAsync(text);
+            return true;
+        }
+    } catch { }
+
+    return false;
 }
 
 export function ItemDetailsPopup({
@@ -46,6 +72,20 @@ export function ItemDetailsPopup({
     onClose: () => void;
 }) {
     const parsed = pickVcOrVp(data);
+    const [showRawVp, setShowRawVp] = useState(false);
+
+    useEffect(() => {
+        if (!visible) setShowRawVp(false);
+    }, [visible, item?.id]);
+
+    const rawVp = useMemo(() => {
+        if (item?.kind !== "vp" || !parsed) return "";
+        try {
+            return JSON.stringify(parsed, null, 2);
+        } catch {
+            return String(parsed ?? "");
+        }
+    }, [item?.kind, parsed]);
 
     const scheme = useColorScheme();
     const isDark = scheme === "dark";
@@ -65,6 +105,7 @@ export function ItemDetailsPopup({
                 btnBg: COLORS.accentBg,
                 btnBorder: COLORS.accentBorder,
                 btnText: COLORS.accentText,
+                rawBg: "rgba(255,255,255,0.03)",
             }
             : {
                 overlay: "rgba(0,0,0,0.35)",
@@ -79,6 +120,7 @@ export function ItemDetailsPopup({
                 btnBg: COLORS.accentBg,
                 btnBorder: COLORS.accentBorder,
                 btnText: "#111827",
+                rawBg: "rgba(17,24,39,0.03)",
             };
     }, [isDark]);
 
@@ -119,7 +161,7 @@ export function ItemDetailsPopup({
                             ) : error ? (
                                 <Text style={[s.error, { color: "#F87171" }]}>{error}</Text>
                             ) : (
-                                <ScrollView style={{ maxHeight: 340 }} contentContainerStyle={{ paddingBottom: 6 }}>
+                                <ScrollView style={{ maxHeight: 430 }} contentContainerStyle={{ paddingBottom: 6 }}>
                                     {item.kind === "vc" && parsed ? (
                                         <View style={[s.section, { backgroundColor: theme.panelBg, borderColor: theme.panelBorder }]}>
                                             <Text style={[s.sectionTitle, { color: theme.text }]}>Credential</Text>
@@ -173,6 +215,59 @@ export function ItemDetailsPopup({
                                                     {parsed?.holder ?? "-"}
                                                 </Text>
                                             </View>
+
+                                            <View style={s.actionsRow}>
+                                                <Pressable
+                                                    style={[s.actionBtn, { backgroundColor: theme.btnBg, borderColor: theme.btnBorder }]}
+                                                    onPress={() => setShowRawVp((v) => !v)}
+                                                >
+                                                    <Text style={[s.actionBtnText, { color: theme.btnText }]}>
+                                                        {showRawVp ? "Hide raw VP" : "View raw VP"}
+                                                    </Text>
+                                                </Pressable>
+
+                                                <Pressable
+                                                    style={[s.actionBtn, { backgroundColor: theme.btnBg, borderColor: theme.btnBorder }]}
+                                                    onPress={async () => {
+                                                        const ok = await copyText(rawVp);
+                                                        if (ok) {
+                                                            Alert.alert("Copied", "Raw VP copied.");
+                                                        } else {
+                                                            Alert.alert(
+                                                                "Copy failed",
+                                                                "Could not copy automatically. Open raw VP and copy manually."
+                                                            );
+                                                        }
+                                                    }}
+                                                >
+                                                    <Text style={[s.actionBtnText, { color: theme.btnText }]}>
+                                                        Copy raw VP
+                                                    </Text>
+                                                </Pressable>
+                                            </View>
+
+                                            {showRawVp ? (
+                                                <View
+                                                    style={[
+                                                        s.rawWrap,
+                                                        {
+                                                            backgroundColor: theme.rawBg,
+                                                            borderColor: theme.panelBorder,
+                                                        },
+                                                    ]}
+                                                >
+                                                    <TextInput
+                                                        value={rawVp}
+                                                        editable={false}
+                                                        multiline
+                                                        scrollEnabled
+                                                        selectTextOnFocus
+                                                        autoCorrect={false}
+                                                        autoCapitalize="none"
+                                                        style={[s.rawInput, { color: theme.text }]}
+                                                    />
+                                                </View>
+                                            ) : null}
                                         </View>
                                     ) : null}
 
@@ -205,7 +300,10 @@ export function ItemDetailsPopup({
                                 </ScrollView>
                             )}
 
-                            <Pressable style={[s.okBtn, { backgroundColor: theme.btnBg, borderColor: theme.btnBorder }]} onPress={onClose}>
+                            <Pressable
+                                style={[s.okBtn, { backgroundColor: theme.btnBg, borderColor: theme.btnBorder }]}
+                                onPress={onClose}
+                            >
                                 <Text style={[s.okText, { color: theme.btnText }]}>Close</Text>
                             </Pressable>
                         </>
@@ -275,6 +373,37 @@ const s = StyleSheet.create({
         flex: 1,
         fontSize: 12,
         textAlign: "right",
+        fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+    },
+
+    actionsRow: {
+        flexDirection: "row",
+        gap: 8,
+        flexWrap: "wrap",
+        marginTop: 10,
+    },
+    actionBtn: {
+        borderRadius: 999,
+        paddingHorizontal: 12,
+        paddingVertical: 9,
+        borderWidth: 1,
+    },
+    actionBtnText: {
+        fontSize: 12,
+        fontWeight: "800",
+    },
+
+    rawWrap: {
+        marginTop: 10,
+        borderRadius: 12,
+        borderWidth: 1,
+        padding: 10,
+    },
+    rawInput: {
+        minHeight: 220,
+        maxHeight: 320,
+        fontSize: 12,
+        textAlignVertical: "top",
         fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
     },
 

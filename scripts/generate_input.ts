@@ -2,16 +2,17 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { decodeJwt } from "jose";
-import { keccak256, toUtf8Bytes } from "ethers";
 import { alpha2ToNumeric } from "./iso3166";
 
 interface CredentialSubject {
   id?: string;
-  age?: string | number;
-  income?: string | number;
-  citizenship?: string;
+  ageCommit?: string;
+  citizenshipCommit?: string;
+  incomeCommit?: string;
+  currency?: string;
   [k: string]: unknown;
 }
+
 type VCShape =
   | string
   | {
@@ -20,6 +21,7 @@ type VCShape =
       proof?: { jwt?: string };
       [k: string]: unknown;
     };
+
 interface VPShape {
   holder?: string;
   verifiableCredential?: VCShape[];
@@ -60,26 +62,48 @@ function ensureDir(p: string) {
   fs.mkdirSync(p, { recursive: true });
 }
 
+function getVcJwt(vcItem: VCShape): string {
+  if (typeof vcItem === "string") return vcItem;
+  const jwt = vcItem?.proof?.jwt;
+  if (!jwt) {
+    throw new Error("VC item missing proof.jwt");
+  }
+  return jwt;
+}
+
+function parseFieldElement(name: string, value: any): string {
+  const s = String(value ?? "").trim();
+  if (!/^\d+$/.test(s)) throw new Error(`Bad field element: ${name}`);
+  return s;
+}
+
+function parseBig(name: string, value: any): bigint {
+  const s = String(value ?? "").trim();
+  if (!/^\d+$/.test(s)) throw new Error(`Bad bigint: ${name}`);
+  return BigInt(s);
+}
+
+function ensureFits(v: bigint, bits: number, name: string) {
+  const max = 1n << BigInt(bits);
+  if (v < 0n || v >= max) {
+    throw new Error(`${name}=${v} exceeds ${bits} bits`);
+  }
+}
+
 (function main() {
   const [, , c, rel, ...rest] = process.argv;
   if (!c || !rel) {
     console.error(
-      "Usage: tsx scripts/generate_input.ts <circuit> <vpPath> [--contextId <hex>|--policy rest/policy.json] --cit <RO> --L <min> --U <max> [--anchors 1]"
+      "Usage: tsx scripts/generate_input.ts <circuit> <vpPath> --age <n> --income <n> --cit <RO> --saltAge <n> --saltCit <n> --saltIncome <n> --L <min> --U <max> [--contextId <n>|--policy <json>]",
     );
     process.exit(1);
   }
+
   const circuit = c as CircuitName;
   const vpPath = path.isAbsolute(rel) ? rel : path.resolve(rel);
-
   const flags = parseFlags(rest);
 
   let contextId = flags.contextId || process.env.CONTEXT_ID || "";
-
-  const cit = (flags.cit || flags.citizenship || process.env.CITIZENSHIP || "")
-    .toUpperCase()
-    .trim();
-  const Ls = flags.L || process.env.L;
-  const Us = flags.U || process.env.U;
 
   if (flags.policy) {
     const p = path.isAbsolute(flags.policy)
@@ -94,26 +118,47 @@ function ensureDir(p: string) {
     if (pol.U !== undefined) (flags as any).U = String(pol.U);
   }
 
-  assertDefined(
-    cit || flags.cit || flags.citizenship,
-    "citizenship (--cit RO)"
-  );
-  assertDefined(Ls || flags.L, "L (--L 2000)");
-  assertDefined(Us || flags.U, "U (--U 10000)");
+  const cit = String(
+    flags.cit || flags.citizenship || process.env.CITIZENSHIP || "",
+  )
+    .toUpperCase()
+    .trim();
+
+  const Ls = flags.L || process.env.L;
+  const Us = flags.U || process.env.U;
+
+  assertDefined(cit, "citizenship (--cit RO)");
+  assertDefined(Ls, "L (--L 2000)");
+  assertDefined(Us, "U (--U 10000)");
+  assertDefined(flags.age, "age");
+  assertDefined(flags.income, "income");
+  assertDefined(flags.saltAge, "saltAge");
+  assertDefined(flags.saltCit, "saltCit");
+  assertDefined(flags.saltIncome, "saltIncome");
+
   if (!contextId) {
     throw new Error(
-      "Missing contextId. Pass --contextId <hex> or provide rest/challenge.json or set CONTEXT_ID."
+      "Missing contextId. Pass --contextId <n> or provide --policy <json>.",
     );
   }
 
-  const expectedCitizenshipNum = alpha2ToNumeric(
-    (flags.cit || flags.citizenship || cit)!
-  ).toString();
-  const L = BigInt(flags.L || Ls!);
-  const U = BigInt(flags.U || Us!);
+  const expectedCitizenshipNum = alpha2ToNumeric(cit).toString();
+
+  const age = parseBig("age", flags.age);
+  const income = parseBig("income", flags.income);
+  const citizenship = alpha2ToNumeric(cit);
+
+  const saltAge = parseBig("saltAge", flags.saltAge);
+  const saltCit = parseBig("saltCit", flags.saltCit);
+  const saltIncome = parseBig("saltIncome", flags.saltIncome);
+
+  const L = BigInt(Ls!);
+  const U = BigInt(Us!);
   if (!(L < U)) throw new Error("Policy invalid: L must be < U");
 
-  const wantAnchors = (flags.anchors ?? "0") === "1";
+  ensureFits(age, 8, "age");
+  ensureFits(citizenship, 16, "citizenship");
+  ensureFits(income, 32, "income");
 
   const vp: VPShape = JSON.parse(fs.readFileSync(vpPath, "utf8"));
   const vcs = vp.verifiableCredential ?? [];
@@ -121,140 +166,103 @@ function ensureDir(p: string) {
     throw new Error("VP malformed: verifiableCredential[] missing");
   }
 
-  let didHash: string | null = null;
-  let holderDid: string | undefined = vp.holder;
-
-  let age: bigint | undefined;
-  let income: bigint | undefined;
-  let citizenship: bigint | undefined;
-
-  let credHash_age = "",
-    credHash_inc = "",
-    credHash_cit = "";
-
-  function getVcJwt(vcItem: VCShape): string {
-    if (typeof vcItem === "string") return vcItem;
-    const jwt = vcItem?.proof?.jwt;
-    if (!jwt)
-      throw new Error("VC item missing proof.jwt (or isn’t a JWT string).");
-    return jwt;
-  }
+  let ageCommit: string | undefined;
+  let citizenshipCommit: string | undefined;
+  let incomeCommit: string | undefined;
 
   for (const item of vcs) {
     const jwt = getVcJwt(item);
     const payload: any = decodeJwt(jwt);
     const now = Math.floor(Date.now() / 1000);
-    if (payload?.nbf && payload.nbf > now)
+
+    if (payload?.nbf && payload.nbf > now) {
       throw new Error("VC not yet valid (nbf)");
-    if (payload?.exp && payload.exp < now) throw new Error("VC expired (exp)");
-
-    const issuerDid: string =
-      payload?.iss ??
-      payload?.vc?.issuer?.id ??
-      (typeof item !== "string" ? item?.issuer?.id : undefined);
-    assertDefined(issuerDid, "issuer DID");
-
-    const thisDidHash = keccak256(toUtf8Bytes(issuerDid));
-    if (!didHash) didHash = thisDidHash;
-    else if (didHash !== thisDidHash)
-      throw new Error("Mixed issuers in VP (not allowed in this demo)");
+    }
+    if (payload?.exp && payload.exp < now) {
+      throw new Error("VC expired (exp)");
+    }
 
     const cs: any =
       payload?.vc?.credentialSubject ??
       (typeof item !== "string" ? item?.credentialSubject : undefined) ??
       {};
 
-    if (!holderDid && cs?.id) holderDid = String(cs.id);
-    if (holderDid && cs?.id && String(cs.id) !== holderDid) {
-      throw new Error(
-        `credentialSubject.id != holder: ${cs.id} vs ${holderDid}`
+    if (cs.ageCommit !== undefined && ageCommit === undefined) {
+      ageCommit = parseFieldElement("ageCommit", cs.ageCommit);
+    }
+    if (cs.citizenshipCommit !== undefined && citizenshipCommit === undefined) {
+      citizenshipCommit = parseFieldElement(
+        "citizenshipCommit",
+        cs.citizenshipCommit,
       );
     }
-
-    if (cs.age !== undefined && age === undefined) {
-      age = BigInt(String(cs.age));
-      if (wantAnchors) credHash_age = keccak256(toUtf8Bytes(jwt));
-    }
-    if (cs.income !== undefined && income === undefined) {
-      income = BigInt(String(cs.income));
-      if (wantAnchors) credHash_inc = keccak256(toUtf8Bytes(jwt));
-    }
-    if (cs.citizenship !== undefined && citizenship === undefined) {
-      citizenship = alpha2ToNumeric(String(cs.citizenship));
-      if (wantAnchors) credHash_cit = keccak256(toUtf8Bytes(jwt));
+    if (cs.incomeCommit !== undefined && incomeCommit === undefined) {
+      incomeCommit = parseFieldElement("incomeCommit", cs.incomeCommit);
     }
   }
 
-  if ((!age || !income || !citizenship) && vp.credentialSubject) {
-    const cs = vp.credentialSubject;
-    if (!age && cs.age !== undefined) age = BigInt(String(cs.age));
-    if (!income && cs.income !== undefined) income = BigInt(String(cs.income));
-    if (!citizenship && cs.citizenship !== undefined)
-      citizenship = alpha2ToNumeric(String(cs.citizenship));
-  }
-
-  assertDefined(age, "age");
-  assertDefined(income, "income");
-  assertDefined(citizenship, "citizenship");
-  assertDefined(didHash, "didHash");
-
-  function ensureFits(v: bigint, bits: number, name: string) {
-    const max = 1n << BigInt(bits);
-    if (v < 0n || v >= max)
-      throw new Error(`${name}=${v} exceeds ${bits} bits`);
-  }
-  ensureFits(citizenship, 16, "citizenship");
-  ensureFits(income, 32, "income");
-  ensureFits(age, 8, "age");
-
-  const salt = BigInt("0x" + crypto.randomBytes(31).toString("hex"));
+  assertDefined(ageCommit, "ageCommit in VC");
+  assertDefined(citizenshipCommit, "citizenshipCommit in VC");
+  assertDefined(incomeCommit, "incomeCommit in VC");
 
   let input: Record<string, string>;
+
   switch (circuit.toLowerCase()) {
     case "aggregate":
       input = {
         age: age.toString(),
-        income: income.toString(),
         citizenship: citizenship.toString(),
-        salt: salt.toString(),
+        income: income.toString(),
+
+        saltAge: saltAge.toString(),
+        saltCit: saltCit.toString(),
+        saltIncome: saltIncome.toString(),
+
+        ageCommit,
+        citizenshipCommit,
+        incomeCommit,
+
         expectedCitizenship: expectedCitizenshipNum,
         L: L.toString(),
         U: U.toString(),
         contextId: BigInt(contextId).toString(),
       };
       break;
+
     case "age":
-      input = { age: age.toString(), salt: salt.toString() };
+      input = {
+        age: age.toString(),
+        saltAge: saltAge.toString(),
+        ageCommit,
+      };
       break;
+
     case "citizenship":
       input = {
         citizenship: citizenship.toString(),
-        salt: salt.toString(),
+        saltCit: saltCit.toString(),
+        citizenshipCommit,
         expectedCitizenship: expectedCitizenshipNum,
       };
       break;
+
     case "incomerange":
       input = {
         income: income.toString(),
-        salt: salt.toString(),
+        saltIncome: saltIncome.toString(),
+        incomeCommit,
         L: L.toString(),
         U: U.toString(),
       };
       break;
+
     default:
       throw new Error(`Unknown circuit: ${circuit}`);
-  }
-
-  if (wantAnchors) {
-    input.didHash = didHash!;
-    if (credHash_age) input.credHash_age = credHash_age;
-    if (credHash_cit) input.credHash_cit = credHash_cit;
-    if (credHash_inc) input.credHash_inc = credHash_inc;
   }
 
   const outDir = path.join("build", circuit, `${circuit}_js`);
   ensureDir(outDir);
   const outPath = path.join(outDir, "input.json");
   fs.writeFileSync(outPath, JSON.stringify(input, null, 2));
-  console.log(`💾 Wrote ${outPath}`);
+  console.log(`Wrote ${outPath}`);
 })();

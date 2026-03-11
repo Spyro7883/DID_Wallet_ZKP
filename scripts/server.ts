@@ -1,6 +1,13 @@
 import express from "express";
 import cors from "cors";
-import * as crypto from "node:crypto";
+import {
+  randomBytes,
+  scryptSync,
+  createHmac,
+  createHash,
+  createCipheriv,
+  createDecipheriv,
+} from "node:crypto";
 import { readFileSync } from "node:fs";
 import { keccak256, toUtf8Bytes } from "ethers";
 import * as snarkjs from "snarkjs";
@@ -25,9 +32,9 @@ import jwt from "jsonwebtoken";
 const app = express();
 const PORT = 5501;
 
-// const CIRCUIT = process.env.CIRCUIT || "aggregate";
-// const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
-// const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
+const CIRCUIT = process.env.CIRCUIT || "aggregate";
+const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
+const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
@@ -60,6 +67,8 @@ const gzip = (b: Buffer) =>
   new Promise<Buffer>((res, rej) =>
     zlib.gzip(b, (e, o) => (e ? rej(e) : res(o))),
   );
+
+const toHex = (v: Uint8Array | Buffer) => Buffer.from(v).toString("hex");
 
 async function ds(schema?: string, withEntities = false): Promise<DataSource> {
   const useSsl = String(process.env.DB_SSL || "").toLowerCase() === "true";
@@ -175,9 +184,8 @@ function verifyWalletPass(
   salt: Buffer,
   passGuardHex: string,
 ): boolean {
-  const dk = crypto.scryptSync(passphrase, salt, 32);
-  const calcGuard = crypto
-    .createHmac("sha256", dk)
+  const dk = scryptSync(passphrase, salt, 32);
+  const calcGuard = createHmac("sha256", dk)
     .update("kms-guard-v1")
     .digest("hex");
   return !!passGuardHex && calcGuard === passGuardHex;
@@ -310,11 +318,11 @@ const CHALLENGES = new Map<
   { id: string; challenge: string; exp: number }
 >();
 
-const rid = (n = 16) => crypto.randomBytes(n).toString("hex");
+const rid = (n = 16) => toHex(randomBytes(n));
 const now = () => Date.now();
 
 function issueToken(): { token: string; exp: number } {
-  const token = "tk_" + crypto.randomBytes(16).toString("hex");
+  const token = "tk_" + toHex(randomBytes(16));
   const exp = Math.floor(Date.now() / 1000) + TTL_SECONDS;
   TOKENS.set(token, exp);
   return { token, exp };
@@ -451,116 +459,6 @@ setInterval(() => {
     if (exp < t) TOKENS.delete(token);
   }
 }, 60_000);
-
-// app.post("/present", async (req, res) => {
-//   console.log("\n Payload received @/present");
-//   console.log(JSON.stringify(req.body, null, 2));
-
-//   try {
-//     const { vp, contextId, nonce, zk } = req.body || {};
-
-//     if (contextId === undefined || contextId === null)
-//       throw new Error("contextId is missing");
-//     if (!isPack(zk)) throw new Error("zk pack invalid (proof/publicSignals)");
-//     if (nonce) console.log(`Nonce received: ${nonce} (extra security VP)`);
-
-//     console.log("\n Verification ZK proof...");
-//     const publicSignalsForVerify = Array.isArray(zk.publicSignals)
-//       ? zk.publicSignals
-//       : (() => {
-//           throw new Error(
-//             "publicSignals has to be an array (from public.json) for groth16 verify.",
-//           );
-//         })();
-
-//     console.log(`publicSignals: ${publicSignalsForVerify.length} elements`);
-//     const ok = await snarkjs.groth16.verify(
-//       VERIFICATION_KEY,
-//       publicSignalsForVerify,
-//       zk.proof,
-//     );
-//     if (!ok) throw new Error("zk verification failed");
-//     console.log("valid ZK proof");
-
-//     console.log("\n Structured verification publicSignals...");
-//     const allValid = readSignal(zk.publicSignals, "allValid");
-//     const privHash = readSignal(zk.publicSignals, "privHash");
-//     const agePrivHash = readSignal(zk.publicSignals, "agePrivHash");
-//     const citizenshipPrivHash = readSignal(
-//       zk.publicSignals,
-//       "citizenshipPrivHash",
-//     );
-//     const incomePrivHash = readSignal(zk.publicSignals, "incomePrivHash");
-//     const expectedCitizenship = readSignal(
-//       zk.publicSignals,
-//       "expectedCitizenship",
-//     );
-//     const L = readSignal(zk.publicSignals, "L");
-//     const U = readSignal(zk.publicSignals, "U");
-//     const contextIdPS = readSignal(zk.publicSignals, "contextId");
-
-//     console.log(`   [${IDX.allValid}] allValid: ${allValid}`);
-//     console.log(`   [${IDX.privHash}] privHash: ${privHash}`);
-//     console.log(`   [${IDX.agePrivHash}] agePrivHash: ${agePrivHash}`);
-//     console.log(
-//       `   [${IDX.citizenshipPrivHash}] citizenshipPrivHash: ${citizenshipPrivHash}`,
-//     );
-//     console.log(`   [${IDX.incomePrivHash}] incomePrivHash: ${incomePrivHash}`);
-//     console.log(
-//       `   [${IDX.expectedCitizenship}] expectedCitizenship: ${expectedCitizenship}`,
-//     );
-//     console.log(` [${IDX.L}] L (minIncome): ${L}`);
-//     console.log(` [${IDX.U}] U (maxIncome): ${U}`);
-//     console.log(` [${IDX.contextId}] contextId: ${contextIdPS}`);
-
-//     if (allValid === undefined)
-//       throw new Error("allValid is missing from publicSignals");
-//     if (allValid !== "1" && allValid !== 1)
-//       throw new Error(`allValid has to be 1, but it's ${allValid}`);
-//     console.log("allValid = 1 (all verifications from circuit have passed)");
-
-//     if (contextIdPS === undefined)
-//       throw new Error("contextId is missing from publicSignals");
-//     if (!eqBig(contextIdPS, contextId)) {
-//       throw new Error(
-//         `contextId mismatch: expected "${contextId}", got "${contextIdPS}"`,
-//       );
-//     }
-//     console.log("contextId match");
-
-//     if (!privHash || !agePrivHash || !citizenshipPrivHash || !incomePrivHash) {
-//       throw new Error("One or more hashes are missing from publicSignals");
-//     }
-//     console.log("All present hashes");
-
-//     console.log("\n Parameters verificated:");
-//     console.log(`Citizenship: ${expectedCitizenship}`);
-//     console.log(`Income range: [${L}, ${U}]`);
-//     console.log(`Context: ${contextId}`);
-
-//     const { token, exp } = issueToken();
-//     const expDate = new Date(exp * 1000).toISOString();
-
-//     console.log(`\n Valid payload!`);
-//     console.log(`Token issued: ${token.substring(0, 20)}...`);
-//     console.log(`Expires at: ${expDate}\n`);
-
-//     res.json({
-//       token,
-//       exp,
-//       status: "verified",
-//       verified: {
-//         allValid: true,
-//         contextId,
-//         citizenship: expectedCitizenship,
-//         incomeRange: { min: L, max: U },
-//       },
-//     });
-//   } catch (e: any) {
-//     console.error("\n Error @/present:", e.message || e);
-//     res.status(400).json({ error: String(e?.message ?? e) });
-//   }
-// });
 
 app.post("/requests/register", (req, res) => {
   const { challengeHash, toCommit, context } = req.body || {};
@@ -1634,7 +1532,7 @@ app.post("/wallets/backup", async (req, res) => {
       schema,
       createdAt: new Date().toISOString(),
       meta: {
-        saltHex: saltBuf.toString("hex"),
+        saltHex: Buffer.from(saltBuf).toString("hex"),
         passGuard: guardHex,
         kms: "secretbox+scrypt",
         kdf: { name: "scrypt", N: 16384, r: 8, p: 1, dkLen: 32 },
@@ -1652,11 +1550,11 @@ app.post("/wallets/backup", async (req, res) => {
       : String(passphrase);
 
     const gz = await gzip(Buffer.from(JSON.stringify(dump), "utf8"));
-    const bkpSalt = crypto.randomBytes(16);
-    const key = crypto.scryptSync(exportPass, bkpSalt, 32);
-    const iv = crypto.randomBytes(12);
+    const bkpSalt = randomBytes(16);
+    const key = scryptSync(exportPass, bkpSalt, 32);
+    const iv = randomBytes(12);
 
-    const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
     const ciphertext = Buffer.concat([cipher.update(gz), cipher.final()]);
     const tag = cipher.getAuthTag();
 
@@ -1666,15 +1564,15 @@ app.post("/wallets/backup", async (req, res) => {
       profile: slug(safeProfile),
       kdf: {
         name: "scrypt",
-        saltHex: bkpSalt.toString("hex"),
+        saltHex: toHex(bkpSalt),
         N: 16384,
         r: 8,
         p: 1,
         dkLen: 32,
       },
       enc: "aes-256-gcm",
-      ivHex: iv.toString("hex"),
-      tagHex: tag.toString("hex"),
+      ivHex: toHex(iv),
+      tagHex: toHex(tag),
       ciphertextB64: ciphertext.toString("base64"),
     };
 
@@ -1947,7 +1845,7 @@ app.post("/wallets/restore", async (req, res) => {
 
     let gz: Buffer;
     try {
-      const key = crypto.scryptSync(
+      const key = scryptSync(
         String(backupPassword),
         Buffer.from(String(backup.kdf.saltHex), "hex"),
         32,
@@ -1956,7 +1854,7 @@ app.post("/wallets/restore", async (req, res) => {
       const tag = Buffer.from(String(backup.tagHex), "hex");
       const ciphertext = Buffer.from(String(backup.ciphertextB64), "base64");
 
-      const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+      const decipher = createDecipheriv("aes-256-gcm", key, iv);
       decipher.setAuthTag(tag);
       gz = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     } catch {
@@ -1968,7 +1866,7 @@ app.post("/wallets/restore", async (req, res) => {
     let dump: any;
     try {
       const raw = await gunzip(gz);
-      dump = JSON.parse(raw.toString("utf8"));
+      dump = dump = JSON.parse(Buffer.from(raw).toString("utf8"));
     } catch {
       return res
         .status(400)
@@ -1980,9 +1878,8 @@ app.post("/wallets/restore", async (req, res) => {
       const salt = Buffer.from(String(dump?.meta?.saltHex || ""), "hex");
       const guardExpected = String(dump?.meta?.passGuard || "");
 
-      const dk = crypto.scryptSync(walletPass, salt, 32);
-      const calcGuard = crypto
-        .createHmac("sha256", dk)
+      const dk = scryptSync(walletPass, salt, 32);
+      const calcGuard = createHmac("sha256", dk)
         .update("kms-guard-v1")
         .digest("hex");
 
@@ -2483,7 +2380,7 @@ app.get("/admin/issuer/diddoc", requireAdmin, async (req, res) => {
 
 function hashVcPayload(vc: any) {
   const raw = typeof vc === "string" ? vc : JSON.stringify(vc);
-  return crypto.createHash("sha256").update(raw, "utf8").digest("hex");
+  return createHash("sha256").update(raw, "utf8").digest("hex");
 }
 
 app.post("/admin/vc/issue", requireAdmin, async (req, res) => {
@@ -2803,6 +2700,8 @@ app.get("/admin/proof-requests", requireAdmin, async (req, res) => {
 app.get("/admin/me", requireAdmin, (req, res) => {
   res.json({ ok: true, admin: (req as any).admin });
 });
+
+app.use("/zk", express.static("./build"));
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Verifier running on http://0.0.0.0:${PORT}`);

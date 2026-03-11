@@ -17,7 +17,7 @@ import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as SecureStore from "expo-secure-store";
-import * as Random from "expo-random";
+import * as Crypto from "expo-crypto";
 import * as circomlibjs from "circomlibjs";
 
 import {
@@ -84,7 +84,7 @@ async function poseidon2(a: bigint, b: bigint): Promise<string> {
 }
 
 async function randomSalt31(): Promise<bigint> {
-    const bytes = await Random.getRandomBytesAsync(31);
+    const bytes = await Crypto.getRandomBytesAsync(31);
     const hex = Array.from(bytes)
         .map((b) => b.toString(16).padStart(2, "0"))
         .join("");
