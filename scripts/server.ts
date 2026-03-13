@@ -32,9 +32,9 @@ import jwt from "jsonwebtoken";
 const app = express();
 const PORT = 5501;
 
-const CIRCUIT = process.env.CIRCUIT || "aggregate";
-const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
-const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
+// const CIRCUIT = process.env.CIRCUIT || "aggregate";
+// const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
+// const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
@@ -1866,7 +1866,7 @@ app.post("/wallets/restore", async (req, res) => {
     let dump: any;
     try {
       const raw = await gunzip(gz);
-      dump = dump = JSON.parse(Buffer.from(raw).toString("utf8"));
+      dump = JSON.parse(Buffer.from(raw).toString("utf8"));
     } catch {
       return res
         .status(400)
@@ -2571,8 +2571,6 @@ app.post("/admin/proof-requests", requireAdmin, async (req, res) => {
     const nonce = rid(16);
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
 
-    // constraints: momentan doar “ce se cere” (fără circuite)
-    // poți pune aici: vcTypes, fields, purpose, etc.
     const constraints =
       req.body?.constraints && typeof req.body.constraints === "object"
         ? req.body.constraints
