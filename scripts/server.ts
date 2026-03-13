@@ -296,10 +296,13 @@ const IDX = {
   agePrivHash: 2,
   citizenshipPrivHash: 3,
   incomePrivHash: 4,
-  expectedCitizenship: 5,
-  L: 6,
-  U: 7,
-  contextId: 8,
+  ageCommit: 5,
+  citizenshipCommit: 6,
+  incomeCommit: 7,
+  expectedCitizenship: 8,
+  L: 9,
+  U: 10,
+  contextId: 11,
 };
 
 function readSignal(ps: any[] | Record<string, any>, key: keyof typeof IDX) {

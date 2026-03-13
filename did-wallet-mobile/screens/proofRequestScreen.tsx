@@ -17,6 +17,12 @@ import { useNavigation } from "@react-navigation/native";
 import { loadLastWallet } from "../src/storage/walletSession";
 import { COLORS } from "../src/theme/colors";
 
+import { loadAgeSecret, loadCitizenshipSecret, loadIncomeSecret } from "../src/zk/secrets";
+
+import { runAggregateProof } from "../src/zk/proverBridge";
+import { ZkProver } from "../src/components/ZKProver";
+import type { AggregateZkInput } from "../src/zk/proverTypes";
+
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 const REQUIRED_TYPES = ["CitizenshipCredential", "AgeCredential", "IncomeCredential"] as const;
@@ -38,6 +44,7 @@ type VCListItem = {
     title: string;
     subjectId: string;
     issuanceDate: string;
+    vc?: any;
 };
 
 function notify(title: string, msg: string) {
@@ -68,6 +75,17 @@ function getHolderToken(sess: any): string | null {
     );
 }
 
+function getCommitmentsFromVc(vc: any) {
+    const cs = vc?.credentialSubject ?? {};
+    return {
+        ageCommit: cs.ageCommit ? String(cs.ageCommit) : null,
+        citizenshipCommit: cs.citizenshipCommit ? String(cs.citizenshipCommit) : null,
+        incomeCommit: cs.incomeCommit ? String(cs.incomeCommit) : null,
+        currency: cs.currency ? String(cs.currency) : null,
+    };
+}
+
+
 export default function ProofRequestScreen() {
     const navigation = useNavigation<any>();
     const insets = useSafeAreaInsets();
@@ -83,6 +101,8 @@ export default function ProofRequestScreen() {
 
     const [sending, setSending] = useState(false);
     const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+
+    const [proverReady, setProverReady] = useState(false);
 
     const toggle = (hash: string) => setSelected((p) => ({ ...p, [hash]: !p[hash] }));
 
@@ -104,6 +124,7 @@ export default function ProofRequestScreen() {
 
     const canSend =
         !sending &&
+        proverReady &&
         !!holderDid.trim() &&
         missingRequired.length === 0 &&
         missingSelection.length === 0;
@@ -208,6 +229,101 @@ export default function ProofRequestScreen() {
         return await fetchProofRequest(requestId);
     }
 
+    async function fetchVcByHash(profile: string, passphrase: string, hash: string) {
+        const r = await fetch(`${BASE_URL}/wallets/item`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                profile,
+                passphrase,
+                kind: "vc",
+                id: hash,
+            }),
+        });
+
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j?.ok || !j?.item?.verifiableCredential) {
+            throw new Error(j?.error || "vc_item_failed");
+        }
+
+        return j.item.verifiableCredential;
+    }
+
+    async function buildAggregateInput(
+        selectedVcs: any[],
+        constraints: any,
+    ): Promise<AggregateZkInput> {
+        let ageCommit: string | null = null;
+        let citizenshipCommit: string | null = null;
+        let incomeCommit: string | null = null;
+
+        for (const vc of selectedVcs) {
+            const typeArr = Array.isArray(vc?.type) ? vc.type : [vc?.type].filter(Boolean);
+            const mainType =
+                typeArr.find((t: string) => t !== "VerifiableCredential") || "";
+
+            const commits = getCommitmentsFromVc(vc);
+
+            if (mainType === "AgeCredential") {
+                ageCommit = commits.ageCommit;
+            }
+            if (mainType === "CitizenshipCredential") {
+                citizenshipCommit = commits.citizenshipCommit;
+            }
+            if (mainType === "IncomeCredential") {
+                incomeCommit = commits.incomeCommit;
+            }
+        }
+
+        if (!ageCommit) throw new Error("missing_age_commit");
+        if (!citizenshipCommit) throw new Error("missing_citizenship_commit");
+        if (!incomeCommit) throw new Error("missing_income_commit");
+
+        const ageSecret = await loadAgeSecret(ageCommit);
+        const citSecret = await loadCitizenshipSecret(citizenshipCommit);
+        const incomeSecret = await loadIncomeSecret(incomeCommit);
+
+        if (!ageSecret) throw new Error("missing_age_secret");
+        if (!citSecret) throw new Error("missing_cit_secret");
+        if (!incomeSecret) throw new Error("missing_income_secret");
+
+        const expectedCitizenship =
+            String(
+                constraints?.expectedCitizenship ??
+                constraints?.citizenshipNumeric ??
+                constraints?.citizenship ??
+                "",
+            );
+
+        const L = String(constraints?.L ?? "");
+        const U = String(constraints?.U ?? "");
+        const contextId = String(constraints?.contextId ?? "");
+
+        if (!expectedCitizenship) throw new Error("missing_expected_citizenship");
+        if (!L) throw new Error("missing_L");
+        if (!U) throw new Error("missing_U");
+        if (!contextId) throw new Error("missing_context_id");
+
+        return {
+            age: String(ageSecret.age),
+            citizenship: String(citSecret.citizenship),
+            income: String(incomeSecret.income),
+
+            saltAge: String(ageSecret.saltAge),
+            saltCit: String(citSecret.saltCit),
+            saltIncome: String(incomeSecret.saltIncome),
+
+            ageCommit,
+            citizenshipCommit,
+            incomeCommit,
+
+            expectedCitizenship,
+            L,
+            U,
+            contextId,
+        };
+    }
+
     const generateAndSend = useCallback(async () => {
         if (!BASE_URL) return notify("Error", "Missing EXPO_PUBLIC_API_BASE_URL");
 
@@ -241,6 +357,15 @@ export default function ProofRequestScreen() {
             const vcHashes = Object.keys(selected).filter((h) => selected[h]);
             if (!vcHashes.length) throw new Error("no_credentials_selected");
 
+            const selectedVcObjects = [];
+            for (const h of vcHashes) {
+                const vc = await fetchVcByHash(sess.profileName, sess.passphrase, h);
+                selectedVcObjects.push(vc);
+            }
+
+            const zkInput = await buildAggregateInput(selectedVcObjects, pr.constraints);
+            console.log("zkInput", zkInput);
+
             const vpResp = await fetch(`${BASE_URL}/wallets/vps/create`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -262,13 +387,21 @@ export default function ProofRequestScreen() {
             const vpJwt = vpJson.vpJwt ? String(vpJson.vpJwt) : "";
             const vpHash = vpJson.hash ? String(vpJson.hash) : "";
 
+            if (!vpJwt) {
+                throw new Error("missing_vp_jwt");
+            }
+
+            const { proof, publicSignals } = await runAggregateProof(zkInput);
+
             const subResp = await fetch(`${BASE_URL}/proof-requests/${encodeURIComponent(pr.id)}/submit`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
                     holderDid: holderDid.trim(),
-                    vpJwt: vpJwt || undefined,
+                    vpJwt: vpJwt,
                     vpHash: vpHash || undefined,
+                    proof,
+                    publicSignals,
                 }),
             });
 
@@ -416,7 +549,7 @@ export default function ProofRequestScreen() {
                             <Text style={styles.primaryText}>Sending…</Text>
                         </View>
                     ) : (
-                        <Text style={styles.primaryText}>Generate & Send</Text>
+                        <Text style={styles.primaryText}>Generate proof & Send</Text>
                     )}
                 </Pressable>
 
@@ -426,6 +559,10 @@ export default function ProofRequestScreen() {
                     </Text>
                 ) : null}
             </ScrollView>
+            <ZkProver
+                baseUrl={BASE_URL || ""}
+                onReadyChange={setProverReady}
+            />
         </SafeAreaView>
     );
 }

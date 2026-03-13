@@ -16,9 +16,9 @@ import {
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
-import * as SecureStore from "expo-secure-store";
-import * as Crypto from "expo-crypto";
-import * as circomlibjs from "circomlibjs";
+import { poseidon2 } from "../src/zk/poseidon";
+import { randomSalt31 } from "../src/zk/random";
+import { saveSecretByCommit } from "../src/zk/secrets";
 
 import {
     loadLastWallet,
@@ -70,34 +70,6 @@ function short(s: string, head = 10, tail = 6) {
 }
 
 let _poseidon: any | null = null;
-
-async function getPoseidon() {
-    if (_poseidon) return _poseidon;
-    _poseidon = await (circomlibjs as any).buildPoseidon();
-    return _poseidon;
-}
-
-async function poseidon2(a: bigint, b: bigint): Promise<string> {
-    const p = await getPoseidon();
-    const out = p([a, b]);
-    return p.F.toString(out);
-}
-
-async function randomSalt31(): Promise<bigint> {
-    const bytes = await Crypto.getRandomBytesAsync(31);
-    const hex = Array.from(bytes)
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
-    return BigInt("0x" + hex);
-}
-
-async function saveSecretByCommit(
-    kind: "age" | "cit" | "income",
-    commit: string,
-    payload: any,
-) {
-    await SecureStore.setItemAsync(`zk:${kind}:${commit}`, JSON.stringify(payload));
-}
 
 function calcAgeYears(dobIso: string): number {
     const [y, m, d] = String(dobIso || "").split("-").map(Number);
