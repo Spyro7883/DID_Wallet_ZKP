@@ -17,15 +17,24 @@ import { useNavigation } from "@react-navigation/native";
 import { loadLastWallet } from "../src/storage/walletSession";
 import { COLORS } from "../src/theme/colors";
 
-import { loadAgeSecret, loadCitizenshipSecret, loadIncomeSecret } from "../src/zk/secrets";
+import {
+    loadAgeSecret,
+    loadCitizenshipSecret,
+    loadIncomeSecret,
+} from "../src/zk/secrets";
 
 import { runAggregateProof } from "../src/zk/proverBridge";
-import { ZkProver } from "../src/components/ZKProver";
+import { ZkProver } from "../src/components/ZkProver";
 import type { AggregateZkInput } from "../src/zk/proverTypes";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
-const REQUIRED_TYPES = ["CitizenshipCredential", "AgeCredential", "IncomeCredential"] as const;
+const REQUIRED_TYPES = [
+    "CitizenshipCredential",
+    "AgeCredential",
+    "IncomeCredential",
+] as const;
+
 const FIXED_POLICY = "office_entry";
 
 type ProofRequest = {
@@ -44,7 +53,6 @@ type VCListItem = {
     title: string;
     subjectId: string;
     issuanceDate: string;
-    vc?: any;
 };
 
 function notify(title: string, msg: string) {
@@ -79,12 +87,23 @@ function getCommitmentsFromVc(vc: any) {
     const cs = vc?.credentialSubject ?? {};
     return {
         ageCommit: cs.ageCommit ? String(cs.ageCommit) : null,
-        citizenshipCommit: cs.citizenshipCommit ? String(cs.citizenshipCommit) : null,
+        citizenshipCommit: cs.citizenshipCommit
+            ? String(cs.citizenshipCommit)
+            : null,
         incomeCommit: cs.incomeCommit ? String(cs.incomeCommit) : null,
         currency: cs.currency ? String(cs.currency) : null,
     };
 }
 
+function getVcMainType(vc: any) {
+    const typeArr = Array.isArray(vc?.type) ? vc.type : [vc?.type].filter(Boolean);
+    return typeArr.find((t: string) => t !== "VerifiableCredential") || "";
+}
+
+function getVcSubjectId(vc: any) {
+    const cs = vc?.credentialSubject;
+    return typeof cs === "object" && cs?.id ? String(cs.id) : "";
+}
 
 export default function ProofRequestScreen() {
     const navigation = useNavigation<any>();
@@ -100,16 +119,14 @@ export default function ProofRequestScreen() {
     const [selected, setSelected] = useState<Record<string, boolean>>({});
 
     const [sending, setSending] = useState(false);
-    const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
+    const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(
+        null,
+    );
 
     const [proverReady, setProverReady] = useState(false);
 
-    const toggle = (hash: string) => setSelected((p) => ({ ...p, [hash]: !p[hash] }));
-
-    const selectedHashes = useMemo(
-        () => Object.keys(selected).filter((h) => selected[h]),
-        [selected],
-    );
+    const toggle = (hash: string) =>
+        setSelected((p) => ({ ...p, [hash]: !p[hash] }));
 
     const missingRequired = useMemo(() => {
         const have = new Set(vcs.map((v) => v.title));
@@ -137,28 +154,41 @@ export default function ProofRequestScreen() {
             const s = await fetch(`${BASE_URL}/wallets/summary`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ profile: sess.profileName, passphrase: sess.passphrase, limit: 1 }),
+                body: JSON.stringify({
+                    profile: sess.profileName,
+                    passphrase: sess.passphrase,
+                    limit: 1,
+                }),
             });
+
             const sj = await s.json().catch(() => ({}));
-            if (s.ok && sj?.ok && sj?.activeDid) setHolderDid(String(sj.activeDid));
+            if (s.ok && sj?.ok && sj?.activeDid) {
+                setHolderDid(String(sj.activeDid));
+            }
         } catch { }
     }, []);
 
     const loadVcs = useCallback(async (): Promise<VCListItem[]> => {
         setVcsLoading(true);
+
         try {
             const sess = await loadLastWallet();
             if (!sess?.profileName || !sess?.passphrase) {
                 navigation.reset({ index: 0, routes: [{ name: "Welcome" }] });
                 return [];
             }
+
             if (!BASE_URL) throw new Error("Missing EXPO_PUBLIC_API_BASE_URL");
 
             const r = await fetch(`${BASE_URL}/wallets/vcs/list`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ profile: sess.profileName, passphrase: sess.passphrase }),
+                body: JSON.stringify({
+                    profile: sess.profileName,
+                    passphrase: sess.passphrase,
+                }),
             });
+
             const j = await r.json().catch(() => ({}));
             if (!r.ok || !j?.ok) throw new Error(j?.error || "vcs_list_failed");
 
@@ -181,24 +211,36 @@ export default function ProofRequestScreen() {
     }, [navigation]);
 
     const listForDisplay = useMemo(() => {
-        const a = vcs.filter((x) => (REQUIRED_TYPES as readonly string[]).includes(x.title));
-        const b = vcs.filter((x) => !(REQUIRED_TYPES as readonly string[]).includes(x.title));
+        const a = vcs.filter((x) =>
+            (REQUIRED_TYPES as readonly string[]).includes(x.title),
+        );
+        const b = vcs.filter(
+            (x) => !(REQUIRED_TYPES as readonly string[]).includes(x.title),
+        );
         return [...a, ...b];
     }, [vcs]);
 
     async function fetchProofRequest(id: string): Promise<ProofRequest> {
-        const r = await fetch(`${BASE_URL}/proof-requests/${encodeURIComponent(id)}`, {
-            method: "GET",
-            headers: { "Content-Type": "application/json" },
-        });
+        const r = await fetch(
+            `${BASE_URL}/proof-requests/${encodeURIComponent(id)}`,
+            {
+                method: "GET",
+                headers: { "Content-Type": "application/json" },
+            },
+        );
+
         const j = await r.json().catch(() => ({}));
-        if (!r.ok || !j?.ok || !j?.request) throw new Error(j?.error || "request_not_found");
+        if (!r.ok || !j?.ok || !j?.request) {
+            throw new Error(j?.error || "request_not_found");
+        }
 
         return {
             id: String(j.request.id),
             status: String(j.request.status),
             policy: String(j.request.policy),
-            requesterId: j.request.requesterId ? String(j.request.requesterId) : null,
+            requesterId: j.request.requesterId
+                ? String(j.request.requesterId)
+                : null,
             nonce: String(j.request.nonce),
             constraints: j.request.constraints ?? {},
             expiresAt: String(j.request.expiresAt),
@@ -223,13 +265,20 @@ export default function ProofRequestScreen() {
         const j = await r.json().catch(() => ({}));
         if (!r.ok || !j?.ok) throw new Error(j?.error || "start_failed");
 
-        const requestId = String(j.requestId || j.id || j.request?.id || "").trim();
+        const requestId = String(
+            j.requestId || j.id || j.request?.id || "",
+        ).trim();
+
         if (!requestId) throw new Error("bad_start_response");
 
         return await fetchProofRequest(requestId);
     }
 
-    async function fetchVcByHash(profile: string, passphrase: string, hash: string) {
+    async function fetchVcByHash(
+        profile: string,
+        passphrase: string,
+        hash: string,
+    ) {
         const r = await fetch(`${BASE_URL}/wallets/item`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -258,10 +307,7 @@ export default function ProofRequestScreen() {
         let incomeCommit: string | null = null;
 
         for (const vc of selectedVcs) {
-            const typeArr = Array.isArray(vc?.type) ? vc.type : [vc?.type].filter(Boolean);
-            const mainType =
-                typeArr.find((t: string) => t !== "VerifiableCredential") || "";
-
+            const mainType = getVcMainType(vc);
             const commits = getCommitmentsFromVc(vc);
 
             if (mainType === "AgeCredential") {
@@ -287,13 +333,12 @@ export default function ProofRequestScreen() {
         if (!citSecret) throw new Error("missing_cit_secret");
         if (!incomeSecret) throw new Error("missing_income_secret");
 
-        const expectedCitizenship =
-            String(
-                constraints?.expectedCitizenship ??
-                constraints?.citizenshipNumeric ??
-                constraints?.citizenship ??
-                "",
-            );
+        const expectedCitizenship = String(
+            constraints?.expectedCitizenship ??
+            constraints?.citizenshipNumeric ??
+            constraints?.citizenship ??
+            "",
+        );
 
         const L = String(constraints?.L ?? "");
         const U = String(constraints?.U ?? "");
@@ -325,7 +370,10 @@ export default function ProofRequestScreen() {
     }
 
     const generateAndSend = useCallback(async () => {
-        if (!BASE_URL) return notify("Error", "Missing EXPO_PUBLIC_API_BASE_URL");
+        if (!BASE_URL) {
+            notify("Error", "Missing EXPO_PUBLIC_API_BASE_URL");
+            return;
+        }
 
         setSending(true);
         setReqErr("");
@@ -337,6 +385,7 @@ export default function ProofRequestScreen() {
             if (missingRequired.length) {
                 throw new Error(`wallet_missing:${missingRequired.join(",")}`);
             }
+
             if (missingSelection.length) {
                 throw new Error(`select_required:${missingSelection.join(",")}`);
             }
@@ -350,6 +399,15 @@ export default function ProofRequestScreen() {
             const pr = await startProofSessionFixed();
             setReq(pr);
 
+            if (
+                !pr.constraints?.expectedCitizenship ||
+                !pr.constraints?.L ||
+                !pr.constraints?.U ||
+                !pr.constraints?.contextId
+            ) {
+                throw new Error("invalid_request_constraints");
+            }
+
             if (pr.status !== "open" || isExpired(pr.expiresAt)) {
                 throw new Error("request_not_open_or_expired");
             }
@@ -357,14 +415,23 @@ export default function ProofRequestScreen() {
             const vcHashes = Object.keys(selected).filter((h) => selected[h]);
             if (!vcHashes.length) throw new Error("no_credentials_selected");
 
-            const selectedVcObjects = [];
+            const selectedVcObjects: any[] = [];
             for (const h of vcHashes) {
                 const vc = await fetchVcByHash(sess.profileName, sess.passphrase, h);
                 selectedVcObjects.push(vc);
             }
 
+            for (const vc of selectedVcObjects) {
+                const subjectId = getVcSubjectId(vc);
+                if (subjectId && subjectId !== holderDid.trim()) {
+                    throw new Error("selected_vc_subject_mismatch");
+                }
+            }
+
             const zkInput = await buildAggregateInput(selectedVcObjects, pr.constraints);
             console.log("zkInput", zkInput);
+
+            const { proof, publicSignals } = await runAggregateProof(zkInput);
 
             const vpResp = await fetch(`${BASE_URL}/wallets/vps/create`, {
                 method: "POST",
@@ -381,7 +448,9 @@ export default function ProofRequestScreen() {
 
             const vpJson = await vpResp.json().catch(() => ({}));
             if (!vpResp.ok || !vpJson?.ok) {
-                throw new Error(vpJson?.error || vpJson?.message || "create_vp_failed");
+                throw new Error(
+                    vpJson?.error || vpJson?.message || "create_vp_failed",
+                );
             }
 
             const vpJwt = vpJson.vpJwt ? String(vpJson.vpJwt) : "";
@@ -391,22 +460,25 @@ export default function ProofRequestScreen() {
                 throw new Error("missing_vp_jwt");
             }
 
-            const { proof, publicSignals } = await runAggregateProof(zkInput);
-
-            const subResp = await fetch(`${BASE_URL}/proof-requests/${encodeURIComponent(pr.id)}/submit`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    holderDid: holderDid.trim(),
-                    vpJwt: vpJwt,
-                    vpHash: vpHash || undefined,
-                    proof,
-                    publicSignals,
-                }),
-            });
+            const subResp = await fetch(
+                `${BASE_URL}/proof-requests/${encodeURIComponent(pr.id)}/submit`,
+                {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        holderDid: holderDid.trim(),
+                        vpJwt,
+                        vpHash: vpHash || undefined,
+                        proof,
+                        publicSignals,
+                    }),
+                },
+            );
 
             const subJson = await subResp.json().catch(() => ({}));
-            if (!subResp.ok || !subJson?.ok) throw new Error(subJson?.error || "submit_failed");
+            if (!subResp.ok || !subJson?.ok) {
+                throw new Error(subJson?.error || "submit_failed");
+            }
 
             setResult({ ok: true, msg: String(subJson.status || "accepted") });
             notify("Sent", "Proof submitted.");
@@ -414,11 +486,30 @@ export default function ProofRequestScreen() {
             const msg = String(e?.message || e);
 
             if (msg.startsWith("wallet_missing:")) {
-                notify("Missing credentials", `Wallet is missing: ${msg.replace("wallet_missing:", "").split(",").join(", ")}`);
+                notify(
+                    "Missing credentials",
+                    `Wallet is missing: ${msg
+                        .replace("wallet_missing:", "")
+                        .split(",")
+                        .join(", ")}`,
+                );
             } else if (msg.startsWith("select_required:")) {
-                notify("Select required", `Select credentials for: ${msg.replace("select_required:", "").split(",").join(", ")}`);
+                notify(
+                    "Select required",
+                    `Select credentials for: ${msg
+                        .replace("select_required:", "")
+                        .split(",")
+                        .join(", ")}`,
+                );
             } else if (msg === "missing_holder_token") {
                 notify("Not connected", "Missing holder token. Do pairing/connect first.");
+            } else if (msg === "selected_vc_subject_mismatch") {
+                notify(
+                    "Invalid selection",
+                    "One of the selected credentials belongs to another holder.",
+                );
+            } else if (msg === "prover_not_ready") {
+                notify("Prover", "ZK prover is not ready yet. Wait a few seconds.");
             } else {
                 notify("Error", msg || "Could not generate/send proof");
             }
@@ -440,17 +531,26 @@ export default function ProofRequestScreen() {
             style={[styles.container, { paddingTop: insets.top + 12 }]}
             edges={["left", "right"]}
         >
-            <ScrollView contentContainerStyle={{ paddingBottom: 24 }} keyboardShouldPersistTaps="handled">
+            <ScrollView
+                contentContainerStyle={{ paddingBottom: 24 }}
+                keyboardShouldPersistTaps="handled"
+            >
                 <View style={styles.topBar}>
-                    <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={styles.topLeft}>
+                    <Pressable
+                        onPress={() => navigation.goBack()}
+                        hitSlop={10}
+                        style={styles.topLeft}
+                    >
                         <MaterialIcons name="arrow-back" size={24} color={COLORS.text} />
                     </Pressable>
+
                     <Text style={styles.topTitle}>Proof request</Text>
                     <View style={styles.topRight} />
                 </View>
 
                 <View style={styles.card}>
                     <Text style={styles.cardTitle}>Required credentials</Text>
+
                     <View style={[styles.chipsRow, { marginTop: 8 }]}>
                         {REQUIRED_TYPES.map((t) => (
                             <View key={t} style={styles.chip}>
@@ -470,6 +570,10 @@ export default function ProofRequestScreen() {
                             Select: {missingSelection.join(", ")}
                         </Text>
                     ) : null}
+
+                    <Text style={[styles.cardSub, { marginTop: 10 }]}>
+                        Prover: {proverReady ? "READY" : "LOADING"}
+                    </Text>
                 </View>
 
                 {reqErr ? <Text style={styles.err}>{reqErr}</Text> : null}
@@ -478,10 +582,38 @@ export default function ProofRequestScreen() {
                     <View style={styles.card}>
                         <Text style={styles.cardTitle}>Session</Text>
                         <Text style={styles.cardSub}>policy: {req.policy}</Text>
-                        <Text style={styles.cardSub}>status: {String(req.status).toUpperCase()}</Text>
-                        <Text style={styles.cardSub}>expires: {fmtDateTime(req.expiresAt)}</Text>
-                        <Text style={[styles.cardSub, { marginTop: 6 }]} numberOfLines={1}>
+                        <Text style={styles.cardSub}>
+                            status: {String(req.status).toUpperCase()}
+                        </Text>
+                        <Text style={styles.cardSub}>
+                            expires: {fmtDateTime(req.expiresAt)}
+                        </Text>
+                        <Text style={styles.cardSub}>
+                            constraints: {JSON.stringify(req.constraints ?? {})}
+                        </Text>
+                        <Text
+                            style={[styles.cardSub, { marginTop: 6 }]}
+                            numberOfLines={1}
+                        >
                             id: {req.id}
+                        </Text>
+                    </View>
+                ) : null}
+                {req?.constraints ? (
+                    <View style={styles.card}>
+                        <Text style={styles.cardTitle}>Verifier rules</Text>
+                        <Text style={styles.cardSub}>
+                            Citizenship: {String(
+                                req.constraints.expectedCitizenshipAlpha2 ??
+                                req.constraints.expectedCitizenship ??
+                                "-"
+                            )}
+                        </Text>
+                        <Text style={styles.cardSub}>
+                            Income range: {String(req.constraints.L ?? "-")} - {String(req.constraints.U ?? "-")}
+                        </Text>
+                        <Text style={styles.cardSub}>
+                            Context: {String(req.constraints.contextId ?? "-")}
                         </Text>
                     </View>
                 ) : null}
@@ -496,14 +628,24 @@ export default function ProofRequestScreen() {
                     style={[styles.input, { opacity: 0.9 }]}
                 />
 
-                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+                <View
+                    style={{
+                        flexDirection: "row",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        marginTop: 10,
+                    }}
+                >
                     <Text style={styles.label}>(Select) Credentials</Text>
+
                     <Pressable
                         onPress={loadVcs}
                         disabled={vcsLoading}
                         style={[styles.smallBtn, vcsLoading && { opacity: 0.6 }]}
                     >
-                        <Text style={styles.smallBtnText}>{vcsLoading ? "..." : "Reload"}</Text>
+                        <Text style={styles.smallBtnText}>
+                            {vcsLoading ? "..." : "Reload"}
+                        </Text>
                     </Pressable>
                 </View>
 
@@ -519,15 +661,26 @@ export default function ProofRequestScreen() {
                     }
                     renderItem={({ item }) => {
                         const on = !!selected[item.hash];
+
                         return (
-                            <Pressable onPress={() => toggle(item.hash)} style={[styles.vcRow, on && styles.vcRowOn]}>
+                            <Pressable
+                                onPress={() => toggle(item.hash)}
+                                style={[styles.vcRow, on && styles.vcRowOn]}
+                            >
                                 <View style={{ flex: 1 }}>
-                                    <Text style={styles.vcTitle} numberOfLines={1}>{item.title}</Text>
-                                    <Text style={styles.vcSub} numberOfLines={1} ellipsizeMode="middle">
+                                    <Text style={styles.vcTitle} numberOfLines={1}>
+                                        {item.title}
+                                    </Text>
+                                    <Text
+                                        style={styles.vcSub}
+                                        numberOfLines={1}
+                                        ellipsizeMode="middle"
+                                    >
                                         Subject: {item.subjectId}
                                     </Text>
                                     <Text style={styles.vcSub}>Issued: {item.issuanceDate}</Text>
                                 </View>
+
                                 <MaterialIcons
                                     name={on ? "check-circle" : "radio-button-unchecked"}
                                     size={22}
@@ -554,15 +707,18 @@ export default function ProofRequestScreen() {
                 </Pressable>
 
                 {result ? (
-                    <Text style={[styles.result, { color: result.ok ? COLORS.muted : "#F87171" }]}>
+                    <Text
+                        style={[
+                            styles.result,
+                            { color: result.ok ? COLORS.muted : "#F87171" },
+                        ]}
+                    >
                         {result.ok ? `Result: ${result.msg}` : `Error: ${result.msg}`}
                     </Text>
                 ) : null}
             </ScrollView>
-            <ZkProver
-                baseUrl={BASE_URL || ""}
-                onReadyChange={setProverReady}
-            />
+
+            <ZkProver baseUrl={BASE_URL || ""} onReadyChange={setProverReady} />
         </SafeAreaView>
     );
 }
@@ -575,12 +731,23 @@ const styles = StyleSheet.create({
         paddingBottom: 16,
     },
 
-    topBar: { height: 48, justifyContent: "center", alignItems: "center", marginBottom: 12 },
+    topBar: {
+        height: 48,
+        justifyContent: "center",
+        alignItems: "center",
+        marginBottom: 12,
+    },
     topLeft: { position: "absolute", left: 0, padding: 4 },
     topRight: { position: "absolute", right: 0, width: 28, height: 28 },
     topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
 
-    label: { fontSize: 12, color: COLORS.muted, marginBottom: 6, marginTop: 10, letterSpacing: 0.2 },
+    label: {
+        fontSize: 12,
+        color: COLORS.muted,
+        marginBottom: 6,
+        marginTop: 10,
+        letterSpacing: 0.2,
+    },
 
     input: {
         borderWidth: 1,
@@ -593,7 +760,6 @@ const styles = StyleSheet.create({
         fontSize: 14,
         ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
     },
-    inputRow: { flexDirection: "row", gap: 8, alignItems: "center" },
 
     smallBtn: {
         backgroundColor: COLORS.accentBg,
@@ -603,7 +769,11 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: COLORS.accentBorder,
     },
-    smallBtnText: { color: COLORS.accentText, fontWeight: "600", fontSize: 12 },
+    smallBtnText: {
+        color: COLORS.accentText,
+        fontWeight: "600",
+        fontSize: 12,
+    },
 
     err: { color: "#F87171", marginTop: 8, fontSize: 12 },
 
@@ -617,9 +787,7 @@ const styles = StyleSheet.create({
     },
     cardTitle: { color: COLORS.text, fontWeight: "600", fontSize: 14 },
     cardSub: { color: COLORS.muted, marginTop: 4, fontSize: 12 },
-    mono: { color: COLORS.text, fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace" },
 
-    sectionLabel: { color: COLORS.muted, fontSize: 12, fontWeight: "600", marginBottom: 6 },
     chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
     chip: {
         backgroundColor: COLORS.accentBg,
@@ -630,8 +798,6 @@ const styles = StyleSheet.create({
         paddingVertical: 6,
     },
     chipText: { color: COLORS.accentText, fontWeight: "600", fontSize: 12 },
-
-    rule: { color: COLORS.muted, fontSize: 12, marginTop: 4 },
 
     vcRow: {
         borderWidth: 1,
@@ -657,7 +823,11 @@ const styles = StyleSheet.create({
         borderColor: COLORS.accentBorder,
         marginTop: 6,
     },
-    primaryText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
+    primaryText: {
+        fontSize: 14,
+        fontWeight: "600",
+        color: COLORS.accentText,
+    },
 
     result: { marginTop: 10, fontSize: 12 },
 });

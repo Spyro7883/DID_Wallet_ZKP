@@ -26,15 +26,17 @@ import * as zlib from "node:zlib";
 import { DataSource } from "typeorm";
 import { Entities } from "@veramo/data-store";
 
+import { alpha2ToNumeric } from "./iso3166";
+
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
 const app = express();
 const PORT = 5501;
 
-// const CIRCUIT = process.env.CIRCUIT || "aggregate";
-// const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
-// const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
+const CIRCUIT = process.env.CIRCUIT || "aggregate";
+const VK_PATH = `./build/${CIRCUIT}/verification_key.json`;
+const VERIFICATION_KEY = JSON.parse(readFileSync(VK_PATH, "utf8"));
 
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
@@ -292,17 +294,13 @@ const eqBig = (a: any, b: any) => {
 
 const IDX = {
   allValid: 0,
-  privHash: 1,
-  agePrivHash: 2,
-  citizenshipPrivHash: 3,
-  incomePrivHash: 4,
-  ageCommit: 5,
-  citizenshipCommit: 6,
-  incomeCommit: 7,
-  expectedCitizenship: 8,
-  L: 9,
-  U: 10,
-  contextId: 11,
+  ageCommit: 1,
+  citizenshipCommit: 2,
+  incomeCommit: 3,
+  expectedCitizenship: 4,
+  L: 5,
+  U: 6,
+  contextId: 7,
 };
 
 function readSignal(ps: any[] | Record<string, any>, key: keyof typeof IDX) {
@@ -536,7 +534,6 @@ app.get("/secret", (req, res) => {
 app.get("/health", (_req, res) => {
   res.json({
     status: "ok",
-    // circuit: CIRCUIT,
     activeTokens: TOKENS.size,
     timestamp: new Date().toISOString(),
   });
@@ -649,7 +646,6 @@ function assertFieldEl(name: string, v: any) {
   const s = String(v ?? "").trim();
   if (!/^\d+$/.test(s)) throw new Error(`bad_${name}`);
   const x = BigInt(s);
-  // 0 e permis/nu, alegi tu; eu îl resping ca să nu ai commitment 0 din greșeală
   if (x <= 0n || x >= SNARK_FIELD) throw new Error(`bad_${name}`);
   return s;
 }
@@ -733,6 +729,32 @@ function sigToB64u(sig: string): string {
   } catch {}
 
   return base64url.encode(Buffer.from(s, "utf8"));
+}
+
+function extractCommitsFromVpJwt(vpJwt: string) {
+  const payload = decodeJwtPayloadLoose(vpJwt);
+  const vcs = payload?.vp?.verifiableCredential ?? [];
+
+  let ageCommit: string | null = null;
+  let citizenshipCommit: string | null = null;
+  let incomeCommit: string | null = null;
+
+  for (const vcJwt of vcs) {
+    const vcPayload = decodeJwtPayloadLoose(String(vcJwt));
+    const cs = vcPayload?.vc?.credentialSubject ?? {};
+
+    if (cs.ageCommit !== undefined && ageCommit === null) {
+      ageCommit = String(cs.ageCommit);
+    }
+    if (cs.citizenshipCommit !== undefined && citizenshipCommit === null) {
+      citizenshipCommit = String(cs.citizenshipCommit);
+    }
+    if (cs.incomeCommit !== undefined && incomeCommit === null) {
+      incomeCommit = String(cs.incomeCommit);
+    }
+  }
+
+  return { ageCommit, citizenshipCommit, incomeCommit, payload };
 }
 
 app.post("/wallets/sign", async (req, res) => {
@@ -983,7 +1005,6 @@ app.get("/admin/vc/requests", requireAdmin, async (req, res) => {
     const where = st === "all" ? "" : "WHERE status = $1";
     const params: any[] = st === "all" ? [] : [st];
 
-    // pagination params
     params.push(limit, offset);
 
     const rows = await d.query(
@@ -2081,7 +2102,9 @@ async function ensureProofRequestsTable() {
         ADD COLUMN IF NOT EXISTS vp_hash TEXT,
         ADD COLUMN IF NOT EXISTS vp_jwt TEXT,
         ADD COLUMN IF NOT EXISTS result TEXT,
-        ADD COLUMN IF NOT EXISTS error TEXT;
+        ADD COLUMN IF NOT EXISTS error TEXT,
+        ADD COLUMN IF NOT EXISTS proof_json JSONB,
+        ADD COLUMN IF NOT EXISTS public_signals_json JSONB;
 
       CREATE INDEX IF NOT EXISTS proof_requests_status_idx ON public.proof_requests(status);
       CREATE INDEX IF NOT EXISTS proof_requests_created_idx ON public.proof_requests(created_at DESC);
@@ -2096,62 +2119,177 @@ async function ensureProofRequestsTable() {
 
 app.post("/proof-requests/:id/submit", async (req, res) => {
   const id = String(req.params.id || "").trim();
-  const { vpJwt, holderDid, vpHash } = req.body || {};
-  if (!vpJwt || !holderDid)
+  const { vpJwt, holderDid, vpHash, proof, publicSignals } = req.body || {};
+
+  if (!vpJwt || !holderDid || !proof || !Array.isArray(publicSignals)) {
     return res.status(400).json({ ok: false, error: "missing_fields" });
+  }
 
   const d = await ds();
+
   try {
     const rows = await d.query(
-      `SELECT id, status, nonce, policy, expires_at
+      `SELECT id, status, nonce, policy, constraints, expires_at
        FROM public.proof_requests
-       WHERE id=$1
+       WHERE id = $1
        LIMIT 1`,
       [id],
     );
+
     const r = rows?.[0];
-    if (!r) return res.status(404).json({ ok: false, error: "not_found" });
+    if (!r) {
+      return res.status(404).json({ ok: false, error: "not_found" });
+    }
 
     const exp = new Date(String(r.expires_at)).getTime();
     if (Date.now() > exp) {
       return res.status(400).json({ ok: false, error: "expired" });
     }
-    if (String(r.status) !== "open")
-      return res.status(409).json({ ok: false, error: "not_open" });
 
-    const payload = decodeJwtPayloadLoose(String(vpJwt));
-    const nonceIn =
-      payload?.nonce ?? payload?.vp?.nonce ?? payload?.vp?.proof?.challenge;
-    const aud = payload?.aud;
+    if (String(r.status) !== "open") {
+      return res.status(409).json({ ok: false, error: "not_open" });
+    }
 
     let ok = true;
     let err: string | null = null;
 
-    if (nonceIn && String(nonceIn) !== String(r.nonce)) {
-      ok = false;
-      err = "nonce_mismatch";
-    }
+    const constraints =
+      r.constraints && typeof r.constraints === "object" ? r.constraints : {};
 
-    if (ok && aud) {
-      const audOk = Array.isArray(aud)
-        ? aud.map(String).includes(String(r.policy))
-        : String(aud) === String(r.policy);
-      if (!audOk) {
+    try {
+      const { payload, ageCommit, citizenshipCommit, incomeCommit } =
+        extractCommitsFromVpJwt(String(vpJwt));
+
+      const nonceIn =
+        payload?.nonce ?? payload?.vp?.nonce ?? payload?.vp?.proof?.challenge;
+
+      const aud = payload?.aud;
+      const holderInVp =
+        payload?.iss ?? payload?.sub ?? payload?.vp?.holder ?? null;
+
+      if (nonceIn && String(nonceIn) !== String(r.nonce)) {
         ok = false;
-        err = "aud_mismatch";
+        err = "nonce_mismatch";
       }
+
+      if (ok && aud) {
+        const audOk = Array.isArray(aud)
+          ? aud.map(String).includes(String(r.policy))
+          : String(aud) === String(r.policy);
+
+        if (!audOk) {
+          ok = false;
+          err = "aud_mismatch";
+        }
+      }
+
+      if (ok && holderInVp && String(holderInVp) !== String(holderDid)) {
+        ok = false;
+        err = "holder_mismatch";
+      }
+
+      if (ok) {
+        const zkOk = await snarkjs.groth16.verify(
+          VERIFICATION_KEY,
+          publicSignals,
+          proof,
+        );
+
+        if (!zkOk) {
+          ok = false;
+          err = "invalid_proof";
+        }
+      }
+
+      if (ok && String(readSignal(publicSignals, "allValid")) !== "1") {
+        ok = false;
+        err = "all_valid_not_one";
+      }
+
+      if (
+        ok &&
+        ageCommit &&
+        String(readSignal(publicSignals, "ageCommit")) !== String(ageCommit)
+      ) {
+        ok = false;
+        err = "age_commit_mismatch";
+      }
+
+      if (
+        ok &&
+        citizenshipCommit &&
+        String(readSignal(publicSignals, "citizenshipCommit")) !==
+          String(citizenshipCommit)
+      ) {
+        ok = false;
+        err = "citizenship_commit_mismatch";
+      }
+
+      if (
+        ok &&
+        incomeCommit &&
+        String(readSignal(publicSignals, "incomeCommit")) !==
+          String(incomeCommit)
+      ) {
+        ok = false;
+        err = "income_commit_mismatch";
+      }
+
+      const expectedCitizenship = String(
+        constraints?.expectedCitizenship ??
+          constraints?.citizenshipNumeric ??
+          constraints?.citizenship ??
+          "",
+      );
+      const L = String(constraints?.L ?? "");
+      const U = String(constraints?.U ?? "");
+      const contextId = String(constraints?.contextId ?? "");
+
+      if (
+        ok &&
+        expectedCitizenship &&
+        String(readSignal(publicSignals, "expectedCitizenship")) !==
+          expectedCitizenship
+      ) {
+        ok = false;
+        err = "expected_citizenship_mismatch";
+      }
+
+      if (ok && L && String(readSignal(publicSignals, "L")) !== L) {
+        ok = false;
+        err = "L_mismatch";
+      }
+
+      if (ok && U && String(readSignal(publicSignals, "U")) !== U) {
+        ok = false;
+        err = "U_mismatch";
+      }
+
+      if (
+        ok &&
+        contextId &&
+        String(readSignal(publicSignals, "contextId")) !== contextId
+      ) {
+        ok = false;
+        err = "context_id_mismatch";
+      }
+    } catch (e: any) {
+      ok = false;
+      err = String(e?.message || "submit_validation_failed");
     }
 
     await d.query(
       `UPDATE public.proof_requests
-       SET status='closed',
-           submitted_at=now(),
-           holder_did=$2,
-           vp_hash=$3,
-           vp_jwt=$4,
-           result=$5,
-           error=$6
-       WHERE id=$1`,
+       SET status = 'closed',
+           submitted_at = now(),
+           holder_did = $2,
+           vp_hash = $3,
+           vp_jwt = $4,
+           result = $5,
+           error = $6,
+           proof_json = $7::jsonb,
+           public_signals_json = $8::jsonb
+       WHERE id = $1`,
       [
         id,
         String(holderDid),
@@ -2159,6 +2297,8 @@ app.post("/proof-requests/:id/submit", async (req, res) => {
         String(vpJwt),
         ok ? "accepted" : "rejected",
         ok ? null : err,
+        JSON.stringify(proof),
+        JSON.stringify(publicSignals),
       ],
     );
 
@@ -2177,7 +2317,6 @@ app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
   if (!policy)
     return res.status(400).json({ ok: false, error: "missing_policy" });
 
-  // optional: allow client to pass extra constraints (prototype)
   const clientConstraints =
     req.body?.constraints && typeof req.body.constraints === "object"
       ? req.body.constraints
@@ -2185,11 +2324,9 @@ app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
 
   const policies = await getProofPolicies();
 
-  // If policy missing -> auto create default template (no more policy_not_allowed)
   let tpl = policies?.[policy];
   if (!tpl) {
-    tpl = { ttlSeconds: 600, constraints: {} };
-    await upsertProofPolicy(policy, tpl);
+    return res.status(400).json({ ok: false, error: "policy_not_configured" });
   }
 
   const ttlFromTpl = Number(tpl?.ttlSeconds || 600);
@@ -2206,6 +2343,22 @@ app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
     ...(tpl?.constraints ?? {}),
     ...(clientConstraints ?? {}),
   });
+
+  if (policy === "office_entry") {
+    const expectedCitizenship = String(
+      mergedConstraints?.expectedCitizenship ?? "",
+    );
+    const L = String(mergedConstraints?.L ?? "");
+    const U = String(mergedConstraints?.U ?? "");
+    const contextId = String(mergedConstraints?.contextId ?? "");
+
+    if (!expectedCitizenship || !L || !U || !contextId) {
+      return res.status(400).json({
+        ok: false,
+        error: "policy_constraints_missing",
+      });
+    }
+  }
 
   const requestId = rid(12);
   const nonce = rid(16);
@@ -2574,10 +2727,46 @@ app.post("/admin/proof-requests", requireAdmin, async (req, res) => {
     const nonce = rid(16);
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
 
-    const constraints =
+    const constraintsIn =
       req.body?.constraints && typeof req.body.constraints === "object"
         ? req.body.constraints
         : {};
+
+    let constraints = normalizeConstraints(constraintsIn);
+
+    if (policy === "office_entry") {
+      const alpha2 = String(
+        constraints.expectedCitizenshipAlpha2 ??
+          constraints.citizenshipAlpha2 ??
+          "RO",
+      )
+        .toUpperCase()
+        .trim();
+
+      const expectedCitizenship = String(
+        constraints.expectedCitizenship ?? alpha2ToNumeric(alpha2).toString(),
+      );
+
+      const L = String(constraints.L ?? "");
+      const U = String(constraints.U ?? "");
+      const contextId = String(constraints.contextId ?? "");
+
+      if (!L || !U || !contextId) {
+        return res.status(400).json({
+          ok: false,
+          error: "missing_office_entry_constraints",
+        });
+      }
+
+      constraints = {
+        ...constraints,
+        expectedCitizenshipAlpha2: alpha2,
+        expectedCitizenship,
+        L,
+        U,
+        contextId,
+      };
+    }
 
     const d = await ds();
     try {
@@ -2598,7 +2787,6 @@ app.post("/admin/proof-requests", requireAdmin, async (req, res) => {
       await d.destroy();
     }
 
-    // link pe care îl pui în QR
     const publicUrlBase = String(
       process.env.PUBLIC_URL_BASE || `http://localhost:${PORT}`,
     );
@@ -2642,7 +2830,6 @@ app.get("/proof-requests/:id", async (req, res) => {
     const r = rows?.[0];
     if (!r) return res.status(404).json({ ok: false, error: "not_found" });
 
-    // expirare simplă
     const exp = new Date(String(r.expires_at)).getTime();
     if (Date.now() > exp && String(r.status) === "open") {
       await d.query(
