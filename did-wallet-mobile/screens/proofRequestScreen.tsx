@@ -53,6 +53,8 @@ type VCListItem = {
     title: string;
     subjectId: string;
     issuanceDate: string;
+    vc?: any;
+    hasLocalSecret?: boolean;
 };
 
 function notify(title: string, msg: string) {
@@ -105,6 +107,25 @@ function getVcSubjectId(vc: any) {
     return typeof cs === "object" && cs?.id ? String(cs.id) : "";
 }
 
+async function hasLocalSecretForVc(vc: any): Promise<boolean> {
+    const cs = vc?.credentialSubject ?? {};
+    const mainType = getVcMainType(vc);
+
+    if (mainType === "AgeCredential" && cs.ageCommit) {
+        return !!(await loadAgeSecret(String(cs.ageCommit)));
+    }
+
+    if (mainType === "CitizenshipCredential" && cs.citizenshipCommit) {
+        return !!(await loadCitizenshipSecret(String(cs.citizenshipCommit)));
+    }
+
+    if (mainType === "IncomeCredential" && cs.incomeCommit) {
+        return !!(await loadIncomeSecret(String(cs.incomeCommit)));
+    }
+
+    return false;
+}
+
 export default function ProofRequestScreen() {
     const navigation = useNavigation<any>();
     const insets = useSafeAreaInsets();
@@ -126,18 +147,63 @@ export default function ProofRequestScreen() {
     const [proverReady, setProverReady] = useState(false);
 
     const toggle = (hash: string) =>
-        setSelected((p) => ({ ...p, [hash]: !p[hash] }));
+        setSelected((prev) => {
+            const item = vcs.find((x) => x.hash === hash);
+            if (!item) return prev;
+
+            const next = { ...prev };
+
+            const sameTypeHashes = vcs
+                .filter((x) => x.title === item.title)
+                .map((x) => x.hash);
+
+            for (const h of sameTypeHashes) {
+                delete next[h];
+            }
+
+            if (!prev[hash]) {
+                next[hash] = true;
+            }
+
+            return next;
+        });
+
+    const holderRequiredVcs = useMemo(() => {
+        const filtered = vcs.filter(
+            (x) =>
+                (REQUIRED_TYPES as readonly string[]).includes(x.title) &&
+                String(x.subjectId || "") === holderDid.trim(),
+        );
+
+        const latestByType = new Map<string, VCListItem>();
+
+        for (const item of filtered) {
+            const prev = latestByType.get(item.title);
+
+            const prevTs = Date.parse(String(prev?.issuanceDate || ""));
+            const curTs = Date.parse(String(item.issuanceDate || ""));
+
+            const prevScore = Number.isFinite(prevTs) ? prevTs : 0;
+            const curScore = Number.isFinite(curTs) ? curTs : 0;
+
+            if (!prev || curScore >= prevScore) {
+                latestByType.set(item.title, item);
+            }
+        }
+
+        return REQUIRED_TYPES.map((t) => latestByType.get(t)).filter(Boolean) as VCListItem[];
+    }, [vcs, holderDid]);
 
     const missingRequired = useMemo(() => {
-        const have = new Set(vcs.map((v) => v.title));
+        const have = new Set(holderRequiredVcs.map((v) => v.title));
         return REQUIRED_TYPES.filter((t) => !have.has(t));
-    }, [vcs]);
+    }, [holderRequiredVcs]);
 
     const missingSelection = useMemo(() => {
-        const selectedVCs = vcs.filter((x) => selected[x.hash]);
+        const selectedVCs = holderRequiredVcs.filter((x) => selected[x.hash]);
         const haveTypes = new Set(selectedVCs.map((x) => x.title));
         return REQUIRED_TYPES.filter((t) => !haveTypes.has(t));
-    }, [vcs, selected]);
+    }, [holderRequiredVcs, selected]);
 
     const canSend =
         !sending &&
@@ -192,15 +258,41 @@ export default function ProofRequestScreen() {
             const j = await r.json().catch(() => ({}));
             if (!r.ok || !j?.ok) throw new Error(j?.error || "vcs_list_failed");
 
-            const list: VCListItem[] = (j.vcs ?? []).map((x: any) => ({
+            const baseList: VCListItem[] = (j.vcs ?? []).map((x: any) => ({
                 hash: String(x.hash),
                 title: String(x.title),
                 subjectId: String(x.subjectId ?? "-"),
                 issuanceDate: String(x.issuanceDate ?? "-"),
             }));
 
-            setVcs(list);
-            return list;
+            const hydrated = await Promise.all(
+                baseList.map(async (item) => {
+                    try {
+                        const vc = await fetchVcByHash(
+                            sess.profileName,
+                            sess.passphrase,
+                            item.hash,
+                        );
+
+                        const hasLocalSecret = await hasLocalSecretForVc(vc);
+
+                        return {
+                            ...item,
+                            vc,
+                            hasLocalSecret,
+                        };
+                    } catch {
+                        return {
+                            ...item,
+                            vc: null,
+                            hasLocalSecret: false,
+                        };
+                    }
+                }),
+            );
+
+            setVcs(hydrated);
+            return hydrated;
         } catch (e: any) {
             notify("Error", e?.message || "Could not load credentials");
             setVcs([]);
@@ -210,15 +302,21 @@ export default function ProofRequestScreen() {
         }
     }, [navigation]);
 
+
+
     const listForDisplay = useMemo(() => {
-        const a = vcs.filter((x) =>
+        return vcs.filter((x) =>
             (REQUIRED_TYPES as readonly string[]).includes(x.title),
         );
-        const b = vcs.filter(
-            (x) => !(REQUIRED_TYPES as readonly string[]).includes(x.title),
-        );
-        return [...a, ...b];
     }, [vcs]);
+
+    useEffect(() => {
+        const next: Record<string, boolean> = {};
+        for (const item of holderRequiredVcs) {
+            next[item.hash] = true;
+        }
+        setSelected(next);
+    }, [holderRequiredVcs]);
 
     async function fetchProofRequest(id: string): Promise<ProofRequest> {
         const r = await fetch(
@@ -259,16 +357,22 @@ export default function ProofRequestScreen() {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${holderToken}`,
             },
-            body: JSON.stringify({ policy: FIXED_POLICY }),
+            body: JSON.stringify({
+                policy: FIXED_POLICY,
+                constraints: {
+                    expectedCitizenship: "642",
+                    expectedCitizenshipAlpha2: "RO",
+                    L: "1000",
+                    U: "5000",
+                    contextId: "12345",
+                },
+            }),
         });
 
         const j = await r.json().catch(() => ({}));
         if (!r.ok || !j?.ok) throw new Error(j?.error || "start_failed");
 
-        const requestId = String(
-            j.requestId || j.id || j.request?.id || "",
-        ).trim();
-
+        const requestId = String(j.requestId || j.id || j.request?.id || "").trim();
         if (!requestId) throw new Error("bad_start_response");
 
         return await fetchProofRequest(requestId);
@@ -328,6 +432,10 @@ export default function ProofRequestScreen() {
         const ageSecret = await loadAgeSecret(ageCommit);
         const citSecret = await loadCitizenshipSecret(citizenshipCommit);
         const incomeSecret = await loadIncomeSecret(incomeCommit);
+
+        console.log("citizenshipCommit from VC =", citizenshipCommit);
+
+        console.log("citSecret =", citSecret);
 
         if (!ageSecret) throw new Error("missing_age_secret");
         if (!citSecret) throw new Error("missing_cit_secret");
@@ -421,6 +529,14 @@ export default function ProofRequestScreen() {
                 selectedVcObjects.push(vc);
             }
 
+            const selectedTypes = new Set(selectedVcObjects.map((vc) => getVcMainType(vc)));
+
+            for (const required of REQUIRED_TYPES) {
+                if (!selectedTypes.has(required)) {
+                    throw new Error(`select_required:${required}`);
+                }
+            }
+
             for (const vc of selectedVcObjects) {
                 const subjectId = getVcSubjectId(vc);
                 if (subjectId && subjectId !== holderDid.trim()) {
@@ -481,6 +597,18 @@ export default function ProofRequestScreen() {
             }
 
             setResult({ ok: true, msg: String(subJson.status || "accepted") });
+
+            const updatedReq = await fetchProofRequest(pr.id).catch(() => null);
+            if (updatedReq) {
+                setReq(updatedReq);
+            } else {
+                setReq((prev) =>
+                    prev ? { ...prev, status: "closed" } : prev
+                );
+            }
+
+            setSelected({});
+            await loadVcs();
             notify("Sent", "Proof submitted.");
         } catch (e: any) {
             const msg = String(e?.message || e);
@@ -660,12 +788,20 @@ export default function ProofRequestScreen() {
                         </Text>
                     }
                     renderItem={({ item }) => {
+                        const wrongSubject = !!holderDid && item.subjectId !== holderDid;
+                        const missingSecret = item.hasLocalSecret === false;
+                        const disabled = wrongSubject || missingSecret;
                         const on = !!selected[item.hash];
+
+                        let reason = "";
+                        if (wrongSubject) reason = "Belongs to another holder";
+                        else if (missingSecret) reason = "Missing local secret";
 
                         return (
                             <Pressable
+                                disabled={disabled}
                                 onPress={() => toggle(item.hash)}
-                                style={[styles.vcRow, on && styles.vcRowOn]}
+                                style={[styles.vcRow, on && styles.vcRowOn, disabled && styles.vcRowDisabled,]}
                             >
                                 <View style={{ flex: 1 }}>
                                     <Text style={styles.vcTitle} numberOfLines={1}>
@@ -679,12 +815,13 @@ export default function ProofRequestScreen() {
                                         Subject: {item.subjectId}
                                     </Text>
                                     <Text style={styles.vcSub}>Issued: {item.issuanceDate}</Text>
+                                    {reason ? <Text style={styles.vcWarn}>{reason}</Text> : null}
                                 </View>
 
                                 <MaterialIcons
                                     name={on ? "check-circle" : "radio-button-unchecked"}
                                     size={22}
-                                    color={on ? COLORS.accentBorder : COLORS.subtle}
+                                    color={disabled ? COLORS.subtle : on ? COLORS.accentBorder : COLORS.subtle}
                                 />
                             </Pressable>
                         );
@@ -813,6 +950,15 @@ const styles = StyleSheet.create({
     vcRowOn: { borderColor: "rgba(216,180,254,0.85)" },
     vcTitle: { color: COLORS.text, fontWeight: "600", fontSize: 13 },
     vcSub: { color: COLORS.subtle, marginTop: 2, fontSize: 11 },
+
+    vcRowDisabled: {
+        opacity: 0.45,
+    },
+    vcWarn: {
+        color: "#F59E0B",
+        marginTop: 4,
+        fontSize: 11,
+    },
 
     primaryBtn: {
         backgroundColor: COLORS.accentBg,

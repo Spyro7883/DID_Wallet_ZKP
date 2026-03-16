@@ -13,7 +13,7 @@ import { keccak256, toUtf8Bytes } from "ethers";
 import * as snarkjs from "snarkjs";
 
 import "reflect-metadata";
-import { setupAgent, type TAgent } from "./agent.ts";
+import { setupAgent, ensureWalletSchemaTables, type TAgent } from "./agent.ts";
 
 import { base64url } from "jose";
 import { ed25519 as edc } from "@noble/curves/ed25519";
@@ -313,6 +313,41 @@ const TTL_SECONDS = 600;
 
 let agent: TAgent;
 let ISSUER_DID = "";
+let issuerDataSource: DataSource | null = null;
+
+async function withWalletAgent<T>(
+  profile: string,
+  passphrase: string,
+  fn: (walletAgent: TAgent) => Promise<T>,
+): Promise<T> {
+  const { agent: walletAgent, dataSource } = await setupAgent(
+    profile,
+    passphrase,
+  );
+
+  try {
+    return await fn(walletAgent);
+  } finally {
+    if (dataSource.isInitialized) {
+      await dataSource.destroy().catch(() => {});
+    }
+  }
+}
+
+async function closeIssuerDataSource() {
+  if (issuerDataSource?.isInitialized) {
+    await issuerDataSource.destroy().catch(() => {});
+    issuerDataSource = null;
+  }
+}
+
+process.on("SIGINT", () => {
+  void closeIssuerDataSource().finally(() => process.exit(0));
+});
+
+process.on("SIGTERM", () => {
+  void closeIssuerDataSource().finally(() => process.exit(0));
+});
 
 const CHALLENGES = new Map<
   string,
@@ -440,19 +475,33 @@ async function upsertProofPolicy(policy: string, tpl: any) {
   await setSetting("proof_policies", cur);
 }
 
-(async () => {
+async function bootstrap() {
   await ensureAdminUsersTable();
   await ensureAdminSettingsTable();
   await ensureVcIssuanceLogTable();
   await ensureVcRequestsTable();
   await ensureProofRequestsTable();
 
-  agent = await setupAgent(
+  const issuerSetup = await setupAgent(
     "issuer",
     process.env.ISSUER_KMS_PASSPHRASE || "change-me",
   );
+
+  agent = issuerSetup.agent;
+  issuerDataSource = issuerSetup.dataSource;
+
   await ensureIssuerDid();
-})();
+
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Verifier running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+bootstrap().catch(async (e) => {
+  console.error("[bootstrap] fatal:", e);
+  await closeIssuerDataSource().catch(() => {});
+  process.exit(1);
+});
 
 setInterval(() => {
   const t = Math.floor(Date.now() / 1000);
@@ -764,37 +813,50 @@ app.post("/wallets/sign", async (req, res) => {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
 
-    const walletAgent = await setupAgent(
+    const result = await withWalletAgent(
       String(profile).trim(),
       String(passphrase),
+      async (walletAgent) => {
+        const dids = await walletAgent.didManagerFind();
+        const ident = (dids || []).find(
+          (i: any) => String(i.did) === String(did),
+        );
+        if (!ident) {
+          throw new Error("did_not_found");
+        }
+
+        const keyRef =
+          ident.keys?.[0]?.kid || ident.controllerKeyId || ident.kid;
+        if (!keyRef) {
+          throw new Error("no_key_for_did");
+        }
+
+        const keyType = String(ident.keys?.[0]?.type || "").toLowerCase();
+        const algorithm = keyType.includes("ed25519") ? "EdDSA" : "ES256K";
+
+        const data = JSON.stringify(payload);
+
+        const sigRaw: string = await (walletAgent as any).keyManagerSign({
+          keyRef,
+          data,
+          encoding: "utf-8",
+          algorithm,
+        });
+
+        return { algorithm, sigRaw };
+      },
     );
 
-    const dids = await walletAgent.didManagerFind();
-    const ident = (dids || []).find((i: any) => String(i.did) === String(did));
-    if (!ident)
-      return res.status(404).json({ ok: false, error: "did_not_found" });
-
-    const keyRef = ident.keys?.[0]?.kid || ident.controllerKeyId || ident.kid;
-
-    if (!keyRef)
-      return res.status(400).json({ ok: false, error: "no_key_for_did" });
-
-    const keyType = String(ident.keys?.[0]?.type || "").toLowerCase();
-    const algorithm = keyType.includes("ed25519") ? "EdDSA" : "ES256K";
-
-    const data = JSON.stringify(payload);
-
-    const sigRaw: string = await (walletAgent as any).keyManagerSign({
-      keyRef,
-      data,
-      encoding: "utf-8",
-      algorithm,
-    });
-
-    const sig = sigToB64u(sigRaw);
-
-    return res.json({ ok: true, alg: algorithm, sig });
+    const sig = sigToB64u(result.sigRaw);
+    return res.json({ ok: true, alg: result.algorithm, sig });
   } catch (e: any) {
+    if (String(e?.message) === "did_not_found") {
+      return res.status(404).json({ ok: false, error: "did_not_found" });
+    }
+    if (String(e?.message) === "no_key_for_did") {
+      return res.status(400).json({ ok: false, error: "no_key_for_did" });
+    }
+
     console.error("[/wallets/sign] error:", e?.message || e);
     return res
       .status(500)
@@ -1198,7 +1260,7 @@ app.post("/wallets", async (req, res) => {
 
     console.log(`[wallets] create profile="${safeProfile}"`);
 
-    await setupAgent(safeProfile, passphrase);
+    await withWalletAgent(safeProfile, passphrase, async () => {});
 
     return res.json({ ok: true, profile: safeProfile });
   } catch (e: any) {
@@ -1217,11 +1279,16 @@ app.post("/wallets/summary", async (req, res) => {
     const safeProfile = String(profile).trim();
     const safeLimit = Number(limit ?? 3);
 
-    const walletAgent = await setupAgent(safeProfile, String(passphrase));
-
-    const dids = await walletAgent.didManagerFind();
-    const vcs = await walletAgent.dataStoreORMGetVerifiableCredentials();
-    const vps = await walletAgent.dataStoreORMGetVerifiablePresentations();
+    const { dids, vcs, vps } = await withWalletAgent(
+      safeProfile,
+      String(passphrase),
+      async (walletAgent) => {
+        const dids = await walletAgent.didManagerFind();
+        const vcs = await walletAgent.dataStoreORMGetVerifiableCredentials();
+        const vps = await walletAgent.dataStoreORMGetVerifiablePresentations();
+        return { dids, vcs, vps };
+      },
+    );
 
     const activeDid = dids[0]?.did ?? null;
 
@@ -1309,80 +1376,92 @@ app.post("/wallets/item", async (req, res) => {
     }
 
     const safeProfile = String(profile).trim();
-    const walletAgent = await setupAgent(safeProfile, String(passphrase));
 
-    const k = String(kind);
+    return await withWalletAgent(
+      safeProfile,
+      String(passphrase),
+      async (walletAgent) => {
+        const k = String(kind);
 
-    if (k === "did") {
-      const did = String(id);
-      const dids = await walletAgent.didManagerFind();
-      const found = dids.find((d: any) => String(d.did) === did);
-      if (!found)
-        return res.status(404).json({ ok: false, error: "did_not_found" });
+        if (k === "did") {
+          const did = String(id);
+          const dids = await walletAgent.didManagerFind();
+          const found = dids.find((d: any) => String(d.did) === did);
+          if (!found) {
+            return res.status(404).json({ ok: false, error: "did_not_found" });
+          }
 
-      let didDoc: any = null;
-      if (resolveDidDoc) {
-        try {
-          didDoc = await walletAgent.resolveDid({ didUrl: did });
-        } catch {
-          didDoc = null;
+          let didDoc: any = null;
+          if (resolveDidDoc) {
+            try {
+              didDoc = await walletAgent.resolveDid({ didUrl: did });
+            } catch {
+              didDoc = null;
+            }
+          }
+
+          return res.json({
+            ok: true,
+            item: {
+              kind: "did",
+              id: did,
+              identifier: found,
+              didDoc,
+            },
+          });
         }
-      }
 
-      return res.json({
-        ok: true,
-        item: {
-          kind: "did",
-          id: did,
-          identifier: found,
-          didDoc,
-        },
-      });
-    }
+        if (k === "vc") {
+          const hash = String(id);
+          const rows = await walletAgent.dataStoreORMGetVerifiableCredentials();
+          const row = (rows || []).find((r: any) => String(r.hash) === hash);
+          if (!row) {
+            return res.status(404).json({ ok: false, error: "vc_not_found" });
+          }
 
-    if (k === "vc") {
-      const hash = String(id);
-      const rows = await walletAgent.dataStoreORMGetVerifiableCredentials();
-      const row = (rows || []).find((r: any) => String(r.hash) === hash);
-      if (!row)
-        return res.status(404).json({ ok: false, error: "vc_not_found" });
+          return res.json({
+            ok: true,
+            item: {
+              kind: "vc",
+              id: hash,
+              hash: row.hash,
+              verifiableCredential: row.verifiableCredential,
+              createdAt: row.createdAt ?? null,
+            },
+          });
+        }
 
-      return res.json({
-        ok: true,
-        item: {
-          kind: "vc",
-          id: hash,
-          hash: row.hash,
-          verifiableCredential: row.verifiableCredential,
-          createdAt: row.createdAt ?? null,
-        },
-      });
-    }
+        if (k === "vp") {
+          const hash = String(id);
+          const rows =
+            await walletAgent.dataStoreORMGetVerifiablePresentations();
+          const row = (rows || []).find((r: any) => String(r.hash) === hash);
+          if (!row) {
+            return res.status(404).json({ ok: false, error: "vp_not_found" });
+          }
 
-    if (k === "vp") {
-      const hash = String(id);
-      const rows = await walletAgent.dataStoreORMGetVerifiablePresentations();
-      const row = (rows || []).find((r: any) => String(r.hash) === hash);
-      if (!row)
-        return res.status(404).json({ ok: false, error: "vp_not_found" });
+          return res.json({
+            ok: true,
+            item: {
+              kind: "vp",
+              id: hash,
+              hash: row.hash,
+              verifiablePresentation: row.verifiablePresentation,
+              createdAt: row.createdAt ?? null,
+            },
+          });
+        }
 
-      return res.json({
-        ok: true,
-        item: {
-          kind: "vp",
-          id: hash,
-          hash: row.hash,
-          verifiablePresentation: row.verifiablePresentation,
-          createdAt: row.createdAt ?? null,
-        },
-      });
-    }
-
-    return res.status(400).json({ ok: false, error: "unsupported_kind" });
+        return res.status(400).json({ ok: false, error: "unsupported_kind" });
+      },
+    );
   } catch (e: any) {
-    return res
-      .status(401)
-      .json({ ok: false, error: String(e?.message || "unauthorized") });
+    console.error("[wallets/item] error:", e?.message || e);
+    return res.status(500).json({
+      ok: false,
+      error: "item_failed",
+      message: String(e?.message || e),
+    });
   }
 });
 
@@ -1400,11 +1479,16 @@ app.post("/wallets/items", async (req, res) => {
       return res.status(400).json({ ok: false, error: "missing_fields" });
 
     const safeProfile = String(profile).trim();
-    const walletAgent = await setupAgent(safeProfile, String(passphrase));
-
-    const dids = await walletAgent.didManagerFind();
-    const vcs = await walletAgent.dataStoreORMGetVerifiableCredentials();
-    const vps = await walletAgent.dataStoreORMGetVerifiablePresentations();
+    const { dids, vcs, vps } = await withWalletAgent(
+      safeProfile,
+      String(passphrase),
+      async (walletAgent) => {
+        const dids = await walletAgent.didManagerFind();
+        const vcs = await walletAgent.dataStoreORMGetVerifiableCredentials();
+        const vps = await walletAgent.dataStoreORMGetVerifiablePresentations();
+        return { dids, vcs, vps };
+      },
+    );
 
     const items: any[] = [];
 
@@ -1634,13 +1718,17 @@ app.post("/wallets/dids/create", async (req, res) => {
       return res.status(400).json({ ok: false, error: "unsupported_provider" });
     }
 
-    const walletAgent = await setupAgent(safeProfile, String(passphrase));
-
-    const identifier = await walletAgent.didManagerCreate({
-      provider,
-      kms: "local",
-      alias: alias ? String(alias).trim() : undefined,
-    });
+    const identifier = await withWalletAgent(
+      safeProfile,
+      String(passphrase),
+      async (walletAgent) => {
+        return await walletAgent.didManagerCreate({
+          provider,
+          kms: "local",
+          alias: alias ? String(alias).trim() : undefined,
+        });
+      },
+    );
 
     return res.json({
       ok: true,
@@ -1658,15 +1746,17 @@ app.post("/wallets/dids/create", async (req, res) => {
 app.post("/wallets/vcs/list", async (req, res) => {
   try {
     const { profile, passphrase } = req.body || {};
-    if (!profile || !passphrase)
+    if (!profile || !passphrase) {
       return res.status(400).json({ ok: false, error: "missing_fields" });
+    }
 
-    const walletAgent = await setupAgent(
+    const rows = await withWalletAgent(
       String(profile).trim(),
       String(passphrase),
+      async (walletAgent) => {
+        return await walletAgent.dataStoreORMGetVerifiableCredentials();
+      },
     );
-
-    const rows = await walletAgent.dataStoreORMGetVerifiableCredentials();
 
     const vcs = (rows || []).map((row: any) => {
       const vc = row.verifiableCredential;
@@ -1752,18 +1842,19 @@ app.post("/wallets/vcs/save", async (req, res) => {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
 
-    const walletAgent = await setupAgent(
-      String(profile).trim(),
-      String(passphrase),
-    );
-
     const vc =
       typeof vcJwt === "string" ? vcObjectFromJwt(vcJwt.trim()) : vcJwt;
 
     try {
-      const saved = await walletAgent.dataStoreSaveVerifiableCredential({
-        verifiableCredential: vc,
-      });
+      const saved = await withWalletAgent(
+        String(profile).trim(),
+        String(passphrase),
+        async (walletAgent) => {
+          return await walletAgent.dataStoreSaveVerifiableCredential({
+            verifiableCredential: vc,
+          });
+        },
+      );
 
       return res.json({ ok: true, hash: saved?.hash ?? null });
     } catch (e: any) {
@@ -1800,37 +1891,42 @@ app.post("/wallets/vps/create", async (req, res) => {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
 
-    const walletAgent = await setupAgent(
+    const { saved, vp } = await withWalletAgent(
       String(profile).trim(),
       String(passphrase),
-    );
+      async (walletAgent) => {
+        const rows = await walletAgent.dataStoreORMGetVerifiableCredentials();
 
-    const rows = await walletAgent.dataStoreORMGetVerifiableCredentials();
-    const byHash = new Map<string, any>();
-    for (const r of rows || [])
-      byHash.set(String(r.hash), r.verifiableCredential);
+        const byHash = new Map<string, any>();
+        for (const r of rows || []) {
+          byHash.set(String(r.hash), r.verifiableCredential);
+        }
 
-    const selected = vcHashes
-      .map((h: any) => byHash.get(String(h)))
-      .filter(Boolean);
+        const selected = vcHashes
+          .map((h: any) => byHash.get(String(h)))
+          .filter(Boolean);
 
-    if (!selected.length) {
-      return res.status(400).json({ ok: false, error: "no_vcs_found" });
-    }
+        if (!selected.length) {
+          throw new Error("no_vcs_found");
+        }
 
-    const vp = await walletAgent.createVerifiablePresentation({
-      presentation: {
-        holder: String(holderDid),
-        verifiableCredential: selected,
+        const vp = await walletAgent.createVerifiablePresentation({
+          presentation: {
+            holder: String(holderDid),
+            verifiableCredential: selected,
+          },
+          proofFormat: "jwt",
+          challenge: challenge ? String(challenge) : undefined,
+          domain: domain ? String(domain) : undefined,
+        });
+
+        const saved = await walletAgent.dataStoreSaveVerifiablePresentation({
+          verifiablePresentation: vp,
+        });
+
+        return { saved, vp };
       },
-      proofFormat: "jwt",
-      challenge: challenge ? String(challenge) : undefined,
-      domain: domain ? String(domain) : undefined,
-    });
-
-    const saved = await walletAgent.dataStoreSaveVerifiablePresentation({
-      verifiablePresentation: vp,
-    });
+    );
 
     const vpJwt =
       typeof vp === "string"
@@ -1841,6 +1937,9 @@ app.post("/wallets/vps/create", async (req, res) => {
 
     return res.json({ ok: true, hash: saved?.hash, vpJwt });
   } catch (e: any) {
+    if (String(e?.message) === "no_vcs_found") {
+      return res.status(400).json({ ok: false, error: "no_vcs_found" });
+    }
     console.error("[wallets/vps/create] error:", e?.message || e);
     return res
       .status(500)
@@ -1925,8 +2024,8 @@ app.post("/wallets/restore", async (req, res) => {
 
     await ensureSchema(schema);
 
-    const empty = await schemaIsEmpty(schema);
-    if (!empty && !overwrite) {
+    const wasEmpty = await schemaIsEmpty(schema);
+    if (!wasEmpty && !overwrite) {
       const d = await ds(schema);
       try {
         const meta = (
@@ -1961,13 +2060,13 @@ app.post("/wallets/restore", async (req, res) => {
       }
     }
 
-    const dSync = await ds(schema, true);
-    await dSync.synchronize();
-    await dSync.destroy();
+    if (wasEmpty) {
+      await ensureWalletSchemaTables(schema);
+    }
 
     const d = await ds(schema);
     try {
-      if (!empty && overwrite) {
+      if (!wasEmpty && overwrite) {
         const fq = TABLES.map((t) => `"${schema}"."${t}"`).join(", ");
         await d.query(`TRUNCATE TABLE ${fq} RESTART IDENTITY CASCADE;`);
       }
@@ -2005,7 +2104,7 @@ app.post("/wallets/restore", async (req, res) => {
       return res.json({
         ok: true,
         profile: finalProfile,
-        mode: empty ? "restored_new" : "restored_overwrite",
+        mode: wasEmpty ? "restored_new" : "restored_overwrite",
       });
     } finally {
       await d.destroy();
@@ -2890,9 +2989,3 @@ app.get("/admin/me", requireAdmin, (req, res) => {
 });
 
 app.use("/zk", express.static("./build"));
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Verifier running on http://0.0.0.0:${PORT}`);
-  // console.log(`Circuit: ${CIRCUIT}`);
-  // console.log(`Verification key: ${VK_PATH}`);
-});

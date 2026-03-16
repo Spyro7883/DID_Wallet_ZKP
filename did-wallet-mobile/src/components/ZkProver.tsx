@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { Platform, StyleSheet, View } from "react-native";
 import { WebView, WebViewMessageEvent } from "react-native-webview";
 
 import { bindAggregateProver, unbindAggregateProver } from "../zk/proverBridge";
@@ -35,6 +35,46 @@ export function ZkProver({ baseUrl, onReadyChange }: Props) {
     }, [ready, onReadyChange]);
 
     useEffect(() => {
+        let cancelled = false;
+
+        async function bindWebProver() {
+            try {
+                const snarkjs = await import("snarkjs");
+
+                if (cancelled) return;
+
+                bindAggregateProver(async (input: AggregateZkInput) => {
+                    const out = await (snarkjs as any).groth16.fullProve(
+                        input,
+                        wasmUrl,
+                        zkeyUrl,
+                    );
+
+                    return {
+                        proof: out.proof,
+                        publicSignals: (out.publicSignals || []).map((x: any) =>
+                            String(x),
+                        ),
+                    };
+                });
+
+                setReady(true);
+            } catch (e) {
+                console.warn("web prover init failed", e);
+                setReady(false);
+            }
+        }
+
+        if (Platform.OS === "web") {
+            bindWebProver();
+
+            return () => {
+                cancelled = true;
+                unbindAggregateProver();
+                setReady(false);
+            };
+        }
+
         bindAggregateProver(async (input: AggregateZkInput) => {
             if (!ready) {
                 throw new Error("prover_not_ready");
@@ -91,29 +131,28 @@ export function ZkProver({ baseUrl, onReadyChange }: Props) {
                 pendingRef.current.delete(id);
                 pending.resolve({
                     proof: msg.proof,
-                    publicSignals: msg.publicSignals || [],
+                    publicSignals: (msg.publicSignals || []).map((x: any) =>
+                        String(x),
+                    ),
                 });
                 return;
             }
 
             if (msg.type === "ERROR") {
-                let handled = false;
-
                 for (const [id, pending] of pendingRef.current.entries()) {
                     clearTimeout(pending.timeout);
                     pendingRef.current.delete(id);
                     pending.reject(new Error(String(msg.error || "prove_failed")));
-                    handled = true;
                     break;
-                }
-
-                if (!handled) {
-                    console.warn("ZkProver ERROR:", msg.error);
                 }
             }
         } catch (e) {
             console.warn("ZkProver message parse failed:", e);
         }
+    }
+
+    if (Platform.OS === "web") {
+        return null;
     }
 
     return (

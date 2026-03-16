@@ -3,11 +3,23 @@ import * as SecureStore from "expo-secure-store";
 
 type SecretKind = "age" | "cit" | "income";
 
-function makeKey(kind: SecretKind, commit: string) {
+function legacyKey(kind: SecretKind, commit: string) {
+  const safeCommit = String(commit).replace(/[^a-zA-Z0-9._-]/g, "_");
+  return `zk_${kind}_${safeCommit}`;
+}
+
+function currentKey(kind: SecretKind, commit: string) {
   return `zk:${kind}:${String(commit)}`;
 }
 
-async function setRaw(key: string, value: string) {
+async function getStored(key: string): Promise<string | null> {
+  if (Platform.OS === "web") {
+    return localStorage.getItem(key);
+  }
+  return await SecureStore.getItemAsync(key);
+}
+
+async function setStored(key: string, value: string) {
   if (Platform.OS === "web") {
     localStorage.setItem(key, value);
     return;
@@ -15,11 +27,12 @@ async function setRaw(key: string, value: string) {
   await SecureStore.setItemAsync(key, value);
 }
 
-async function getRaw(key: string): Promise<string | null> {
+async function deleteStored(key: string) {
   if (Platform.OS === "web") {
-    return localStorage.getItem(key);
+    localStorage.removeItem(key);
+    return;
   }
-  return await SecureStore.getItemAsync(key);
+  await SecureStore.deleteItemAsync(key);
 }
 
 export async function saveSecretByCommit(
@@ -27,14 +40,28 @@ export async function saveSecretByCommit(
   commit: string,
   payload: any,
 ) {
-  await setRaw(makeKey(kind, commit), JSON.stringify(payload));
+  const raw = JSON.stringify(payload);
+  await setStored(currentKey(kind, commit), raw);
 }
 
-export async function loadSecretByCommit(
+async function loadSecretByCommit(
   kind: SecretKind,
   commit: string,
 ): Promise<any | null> {
-  const raw = await getRaw(makeKey(kind, commit));
+  const newKey = currentKey(kind, commit);
+  const oldKey = legacyKey(kind, commit);
+
+  let raw = await getStored(newKey);
+
+  if (!raw) {
+    raw = await getStored(oldKey);
+
+    if (raw) {
+      await setStored(newKey, raw);
+      await deleteStored(oldKey);
+    }
+  }
+
   if (!raw) return null;
 
   try {
@@ -44,14 +71,14 @@ export async function loadSecretByCommit(
   }
 }
 
-export async function loadAgeSecret(commit: string) {
-  return loadSecretByCommit("age", commit);
+export async function loadAgeSecret(ageCommit: string) {
+  return await loadSecretByCommit("age", ageCommit);
 }
 
-export async function loadCitizenshipSecret(commit: string) {
-  return loadSecretByCommit("cit", commit);
+export async function loadCitizenshipSecret(citizenshipCommit: string) {
+  return await loadSecretByCommit("cit", citizenshipCommit);
 }
 
-export async function loadIncomeSecret(commit: string) {
-  return loadSecretByCommit("income", commit);
+export async function loadIncomeSecret(incomeCommit: string) {
+  return await loadSecretByCommit("income", incomeCommit);
 }
