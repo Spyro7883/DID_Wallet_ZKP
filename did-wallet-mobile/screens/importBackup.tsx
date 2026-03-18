@@ -19,6 +19,8 @@ import { saveLastWallet } from "../src/storage/walletSession";
 
 import { BACKUPS_DIR, listLocalBackups } from "../src/storage/backups";
 
+import { importZkSecrets } from "../src/zk/secrets";
+
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 type BackupContainer = {
@@ -232,6 +234,11 @@ export default function ImportBackupScreen() {
             }
 
             const restoredProfile = String(j.profile || walletName.trim());
+
+            if (j.zkSecrets) {
+                await importZkSecrets(j.zkSecrets);
+            }
+
             await saveLastWallet(restoredProfile, effectiveWalletPass);
 
             navigation.reset({

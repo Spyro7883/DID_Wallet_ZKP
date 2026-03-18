@@ -24,6 +24,8 @@ import { loadLastWallet } from "../src/storage/walletSession";
 import { ensureBackupsDir } from "../src/storage/backups";
 import { COLORS } from "../src/theme/colors";
 
+import { exportZkSecrets } from "../src/zk/secrets";
+
 type Summary = {
     activeDid: string | null;
     stats: { dids: number; vcs: number; vps: number };
@@ -222,6 +224,8 @@ export default function BackupScreen() {
                 return;
             }
 
+            const zkSecrets = await exportZkSecrets();
+
             const resp = await fetch(`${BASE_URL}/wallets/backup`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -229,6 +233,7 @@ export default function BackupScreen() {
                     profile: sess.profileName,
                     passphrase: sess.passphrase,
                     backupPassword: useWalletPassword ? undefined : backupPass,
+                    zkSecrets,
                 }),
             });
 

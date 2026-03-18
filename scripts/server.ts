@@ -1604,7 +1604,7 @@ app.get("/wallets/profiles", async (_req, res) => {
 
 app.post("/wallets/backup", async (req, res) => {
   try {
-    const { profile, passphrase, backupPassword } = req.body || {};
+    const { profile, passphrase, backupPassword, zkSecrets } = req.body || {};
     if (!profile || !passphrase) {
       return res.status(400).json({ ok: false, error: "missing_fields" });
     }
@@ -1646,6 +1646,7 @@ app.post("/wallets/backup", async (req, res) => {
         kdf: { name: "scrypt", N: 16384, r: 8, p: 1, dkLen: 32 },
       },
       tables: {} as Record<string, any[]>,
+      zkSecrets: zkSecrets ?? null,
     };
 
     for (const t of TABLES) {
@@ -2054,6 +2055,7 @@ app.post("/wallets/restore", async (req, res) => {
           ok: true,
           profile: finalProfile,
           mode: "login_existing",
+          zkSecrets: dump.zkSecrets ?? null,
         });
       } finally {
         await d.destroy();
@@ -2105,6 +2107,7 @@ app.post("/wallets/restore", async (req, res) => {
         ok: true,
         profile: finalProfile,
         mode: wasEmpty ? "restored_new" : "restored_overwrite",
+        zkSecrets: dump.zkSecrets ?? null,
       });
     } finally {
       await d.destroy();
