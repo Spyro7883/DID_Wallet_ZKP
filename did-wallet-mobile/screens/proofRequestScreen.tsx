@@ -34,7 +34,7 @@ const REQUIRED_TYPES = [
     "IncomeCredential",
 ] as const;
 
-const FIXED_POLICY = "office_entry";
+const FIXED_POLICY = "office_entry.v1";
 
 type ProofRequest = {
     id: string;
@@ -440,13 +440,6 @@ export default function ProofRequestScreen() {
             },
             body: JSON.stringify({
                 policy: FIXED_POLICY,
-                constraints: {
-                    expectedCitizenship: "642",
-                    expectedCitizenshipAlpha2: "RO",
-                    L: "1000",
-                    U: "5000",
-                    contextId: "12345",
-                },
             }),
         });
 

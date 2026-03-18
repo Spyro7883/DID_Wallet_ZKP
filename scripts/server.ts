@@ -281,6 +281,12 @@ function keccakDidSalt(did: string, saltHex: string, challengeHash: string) {
   return keccak256(bytes);
 }
 
+function randomFieldString(bytes = 16) {
+  return BigInt(
+    "0x" + Buffer.from(randomBytes(bytes)).toString("hex"),
+  ).toString();
+}
+
 const isPack = (x: any): x is ProofPack =>
   x && typeof x === "object" && x.proof && x.publicSignals;
 const same = (a: any, b: any) => String(a) === String(b);
@@ -408,6 +414,25 @@ async function ensureSchema(schema: string) {
   await d.destroy();
 }
 
+async function ensureDefaultProofPolicies() {
+  const cur = (await getProofPolicies()) ?? {};
+
+  if (!cur["office_entry.v1"]) {
+    cur["office_entry.v1"] = {
+      ttlSeconds: 600,
+      constraints: {
+        vcTypes: ["CitizenshipCredential", "AgeCredential", "IncomeCredential"],
+        expectedCitizenshipAlpha2: "RO",
+        expectedCitizenship: "642",
+        L: "1000",
+        U: "5000",
+      },
+    };
+  }
+
+  await setSetting("proof_policies", cur);
+}
+
 async function schemaIsEmpty(schema: string): Promise<boolean> {
   const d = await ds(schema);
   try {
@@ -481,6 +506,7 @@ async function bootstrap() {
   await ensureVcIssuanceLogTable();
   await ensureVcRequestsTable();
   await ensureProofRequestsTable();
+  await ensureDefaultProofPolicies();
 
   const issuerSetup = await setupAgent(
     "issuer",
@@ -2419,11 +2445,6 @@ app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
   if (!policy)
     return res.status(400).json({ ok: false, error: "missing_policy" });
 
-  const clientConstraints =
-    req.body?.constraints && typeof req.body.constraints === "object"
-      ? req.body.constraints
-      : null;
-
   const policies = await getProofPolicies();
 
   let tpl = policies?.[policy];
@@ -2431,40 +2452,54 @@ app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
     return res.status(400).json({ ok: false, error: "policy_not_configured" });
   }
 
-  const ttlFromTpl = Number(tpl?.ttlSeconds || 600);
-  const ttlFromReq = req.body?.ttlSeconds;
   const ttlSeconds = Math.min(
     3600,
-    Math.max(
-      30,
-      Number.isFinite(Number(ttlFromReq)) ? Number(ttlFromReq) : ttlFromTpl,
-    ),
+    Math.max(30, Number(tpl?.ttlSeconds || 600)),
   );
 
-  const mergedConstraints = normalizeConstraints({
-    ...(tpl?.constraints ?? {}),
-    ...(clientConstraints ?? {}),
-  });
+  const requestId = rid(12);
+  const nonce = rid(16);
+  const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
 
-  if (policy === "office_entry") {
+  let constraints = normalizeConstraints(tpl?.constraints ?? {});
+
+  if (policy === "office_entry.v1") {
+    const alpha2 = String(
+      constraints.expectedCitizenshipAlpha2 ??
+        constraints.citizenshipAlpha2 ??
+        "RO",
+    )
+      .toUpperCase()
+      .trim();
+
     const expectedCitizenship = String(
-      mergedConstraints?.expectedCitizenship ?? "",
+      constraints.expectedCitizenship ?? alpha2ToNumeric(alpha2).toString(),
     );
-    const L = String(mergedConstraints?.L ?? "");
-    const U = String(mergedConstraints?.U ?? "");
-    const contextId = String(mergedConstraints?.contextId ?? "");
 
-    if (!expectedCitizenship || !L || !U || !contextId) {
+    const L = String(constraints.L ?? "");
+    const U = String(constraints.U ?? "");
+
+    if (!L || !U) {
       return res.status(400).json({
         ok: false,
         error: "policy_constraints_missing",
       });
     }
-  }
 
-  const requestId = rid(12);
-  const nonce = rid(16);
-  const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
+    constraints = {
+      ...constraints,
+      vcTypes: uniqStrings(
+        Array.isArray(constraints.vcTypes) && constraints.vcTypes.length
+          ? constraints.vcTypes
+          : ["CitizenshipCredential", "AgeCredential", "IncomeCredential"],
+      ),
+      expectedCitizenshipAlpha2: alpha2,
+      expectedCitizenship,
+      L,
+      U,
+      contextId: randomFieldString(),
+    };
+  }
 
   const d = await ds();
   try {
@@ -2476,7 +2511,7 @@ app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
         policy,
         null,
         nonce,
-        JSON.stringify(mergedConstraints),
+        JSON.stringify(constraints),
         expiresAt.toISOString(),
       ],
     );
@@ -2488,7 +2523,21 @@ app.post("/holder/proof-requests/start", requireHolder, async (req, res) => {
     requestId,
   )}`;
 
-  return res.json({ ok: true, requestId, link });
+  return res.json({
+    ok: true,
+    requestId,
+    request: {
+      id: requestId,
+      status: "open",
+      policy,
+      requesterId: null,
+      nonce,
+      constraints,
+      expiresAt: expiresAt.toISOString(),
+      createdAt: new Date().toISOString(),
+    },
+    link,
+  });
 });
 
 app.post("/admin/login", async (req, res) => {
