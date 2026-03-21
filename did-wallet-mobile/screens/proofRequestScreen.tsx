@@ -783,6 +783,7 @@ export default function ProofRequestScreen() {
                 {req?.constraints ? (
                     <View style={styles.card}>
                         <Text style={styles.cardTitle}>Verifier rules</Text>
+                        <Text style={styles.cardSub}>Minimum age: 18</Text>
                         <Text style={styles.cardSub}>
                             Citizenship:{" "}
                             {String(

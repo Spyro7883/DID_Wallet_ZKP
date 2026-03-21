@@ -494,10 +494,85 @@ async function getProofPolicies(): Promise<Record<string, any>> {
   return (await getSetting("proof_policies")) ?? {};
 }
 
-async function upsertProofPolicy(policy: string, tpl: any) {
-  const cur = (await getProofPolicies()) ?? {};
-  cur[policy] = tpl;
-  await setSetting("proof_policies", cur);
+async function reserveAccessCodeForPolicyTx(
+  qr: any,
+  policy: string,
+  holderDid: string,
+  proofRequestId: string,
+) {
+  const evRows = await qr.query(
+    `
+    SELECT event_id, title, policy, eventbrite_event_id, checkout_url, enabled
+    FROM public.eventbrite_events
+    WHERE policy = $1
+      AND enabled = TRUE
+    ORDER BY created_at ASC
+    LIMIT 1
+    `,
+    [policy],
+  );
+
+  const ev = evRows?.[0];
+  if (!ev) throw new Error("event_not_found");
+  if (!ev.enabled) throw new Error("event_disabled");
+
+  const codeRows = await qr.query(
+    `
+    SELECT id, code
+    FROM public.eventbrite_access_codes
+    WHERE event_id = $1
+      AND status = 'available'
+    ORDER BY id ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+    `,
+    [ev.event_id],
+  );
+
+  const codeRow = codeRows?.[0];
+  if (!codeRow) throw new Error("no_codes_available");
+
+  await qr.query(
+    `
+    UPDATE public.eventbrite_access_codes
+    SET status = 'reserved',
+        holder_did = $2,
+        proof_request_id = $3,
+        reserved_at = now()
+    WHERE id = $1
+    `,
+    [codeRow.id, holderDid, proofRequestId],
+  );
+
+  const sessionToken = "ecs_" + rid(16);
+  const expiresAt = new Date(Date.now() + 10 * 60_000);
+
+  await qr.query(
+    `
+    INSERT INTO public.event_access_sessions
+      (session_token, event_id, holder_did, proof_request_id, access_code_id, status, expires_at)
+    VALUES
+      ($1, $2, $3, $4, $5, 'eligible', $6)
+    `,
+    [
+      sessionToken,
+      ev.event_id,
+      holderDid,
+      proofRequestId,
+      codeRow.id,
+      expiresAt.toISOString(),
+    ],
+  );
+
+  return {
+    sessionToken,
+    eventId: String(ev.event_id),
+    title: String(ev.title),
+    eventbriteEventId: String(ev.eventbrite_event_id),
+    code: String(codeRow.code),
+    checkoutUrl: String(ev.checkout_url),
+    expiresAt: expiresAt.toISOString(),
+  };
 }
 
 async function bootstrap() {
@@ -507,6 +582,10 @@ async function bootstrap() {
   await ensureVcRequestsTable();
   await ensureProofRequestsTable();
   await ensureDefaultProofPolicies();
+  await ensureEventbriteEventsTable();
+  await ensureEventbriteAccessCodesTable();
+  await ensureEventAccessSessionsTable();
+  await ensureDefaultEventbriteEvent();
 
   const issuerSetup = await setupAgent(
     "issuer",
@@ -2245,6 +2324,122 @@ async function ensureProofRequestsTable() {
   }
 }
 
+async function ensureEventbriteEventsTable() {
+  const d = await ds();
+  try {
+    await d.query(`
+      CREATE TABLE IF NOT EXISTS public.eventbrite_events (
+        event_id TEXT PRIMARY KEY,                 -- id-ul tau intern, ex: private_event_1
+        title TEXT NOT NULL,
+        policy TEXT NOT NULL DEFAULT 'office_entry.v1',
+        eventbrite_event_id TEXT NOT NULL,
+        checkout_url TEXT NOT NULL,               -- linkul de eventbrite event/checkout
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE INDEX IF NOT EXISTS eventbrite_events_enabled_idx
+      ON public.eventbrite_events(enabled);
+    `);
+  } finally {
+    await d.destroy();
+  }
+}
+
+async function ensureEventbriteAccessCodesTable() {
+  const d = await ds();
+  try {
+    await d.query(`
+      CREATE TABLE IF NOT EXISTS public.eventbrite_access_codes (
+        id BIGSERIAL PRIMARY KEY,
+        event_id TEXT NOT NULL REFERENCES public.eventbrite_events(event_id) ON DELETE CASCADE,
+        code TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'available',  -- available | reserved | used | expired
+        holder_did TEXT,
+        proof_request_id TEXT,
+        reserved_at TIMESTAMPTZ,
+        used_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE INDEX IF NOT EXISTS eventbrite_access_codes_event_idx
+      ON public.eventbrite_access_codes(event_id);
+
+      CREATE INDEX IF NOT EXISTS eventbrite_access_codes_status_idx
+      ON public.eventbrite_access_codes(status);
+
+      CREATE INDEX IF NOT EXISTS eventbrite_access_codes_event_status_idx
+      ON public.eventbrite_access_codes(event_id, status);
+    `);
+  } finally {
+    await d.destroy();
+  }
+}
+
+async function ensureEventAccessSessionsTable() {
+  const d = await ds();
+  try {
+    await d.query(`
+      CREATE TABLE IF NOT EXISTS public.event_access_sessions (
+        id BIGSERIAL PRIMARY KEY,
+        session_token TEXT NOT NULL UNIQUE,
+        event_id TEXT NOT NULL REFERENCES public.eventbrite_events(event_id) ON DELETE CASCADE,
+        holder_did TEXT NOT NULL,
+        proof_request_id TEXT NOT NULL REFERENCES public.proof_requests(id) ON DELETE CASCADE,
+        access_code_id BIGINT REFERENCES public.eventbrite_access_codes(id) ON DELETE SET NULL,
+        status TEXT NOT NULL DEFAULT 'eligible',   -- eligible | opened | completed | expired | cancelled
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE INDEX IF NOT EXISTS event_access_sessions_token_idx
+      ON public.event_access_sessions(session_token);
+
+      CREATE INDEX IF NOT EXISTS event_access_sessions_event_idx
+      ON public.event_access_sessions(event_id);
+
+      CREATE INDEX IF NOT EXISTS event_access_sessions_holder_idx
+      ON public.event_access_sessions(holder_did);
+
+      CREATE INDEX IF NOT EXISTS event_access_sessions_proof_idx
+      ON public.event_access_sessions(proof_request_id);
+    `);
+  } finally {
+    await d.destroy();
+  }
+}
+
+async function ensureDefaultEventbriteEvent() {
+  const d = await ds();
+  try {
+    await d.query(
+      `
+      INSERT INTO public.eventbrite_events
+        (event_id, title, policy, eventbrite_event_id, checkout_url, enabled)
+      VALUES
+        ($1, $2, $3, $4, $5, TRUE)
+      ON CONFLICT (event_id) DO UPDATE
+      SET title = EXCLUDED.title,
+          policy = EXCLUDED.policy,
+          eventbrite_event_id = EXCLUDED.eventbrite_event_id,
+          checkout_url = EXCLUDED.checkout_url,
+          enabled = EXCLUDED.enabled,
+          updated_at = now()
+      `,
+      [
+        "private_event_1",
+        "Private Event 1",
+        "office_entry.v1",
+        "1985629321753",
+        "https://www.eventbrite.com/e/testing-zkp-tool-tickets-1985629321753",
+      ],
+    );
+  } finally {
+    await d.destroy();
+  }
+}
+
 app.post("/proof-requests/:id/submit", async (req, res) => {
   const id = String(req.params.id || "").trim();
   const { vpJwt, holderDid, vpHash, proof, publicSignals } = req.body || {};
@@ -2406,35 +2601,116 @@ app.post("/proof-requests/:id/submit", async (req, res) => {
       err = String(e?.message || "submit_validation_failed");
     }
 
-    await d.query(
-      `UPDATE public.proof_requests
-       SET status = 'closed',
-           submitted_at = now(),
-           holder_did = $2,
-           vp_hash = $3,
-           vp_jwt = $4,
-           result = $5,
-           error = $6,
-           proof_json = $7::jsonb,
-           public_signals_json = $8::jsonb
-       WHERE id = $1`,
-      [
-        id,
-        String(holderDid),
-        vpHash ? String(vpHash) : null,
-        String(vpJwt),
-        ok ? "accepted" : "rejected",
-        ok ? null : err,
-        JSON.stringify(proof),
-        JSON.stringify(publicSignals),
-      ],
-    );
-
     if (!ok) {
+      await d.query(
+        `UPDATE public.proof_requests
+         SET status = 'closed',
+             submitted_at = now(),
+             holder_did = $2,
+             vp_hash = $3,
+             vp_jwt = $4,
+             result = 'rejected',
+             error = $5,
+             proof_json = $6::jsonb,
+             public_signals_json = $7::jsonb
+         WHERE id = $1`,
+        [
+          id,
+          String(holderDid),
+          vpHash ? String(vpHash) : null,
+          String(vpJwt),
+          err,
+          JSON.stringify(proof),
+          JSON.stringify(publicSignals),
+        ],
+      );
+
       return res.status(400).json({ ok: false, error: err });
     }
 
-    return res.json({ ok: true, status: "accepted" });
+    const qr = d.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+
+    try {
+      const lockedRows = await qr.query(
+        `
+        SELECT id, status, policy, expires_at
+        FROM public.proof_requests
+        WHERE id = $1
+        FOR UPDATE
+        `,
+        [id],
+      );
+
+      const locked = lockedRows?.[0];
+      if (!locked) {
+        await qr.rollbackTransaction();
+        return res.status(404).json({ ok: false, error: "not_found" });
+      }
+
+      if (String(locked.status) !== "open") {
+        await qr.rollbackTransaction();
+        return res.status(409).json({ ok: false, error: "not_open" });
+      }
+
+      const lockedExp = new Date(String(locked.expires_at)).getTime();
+      if (Date.now() > lockedExp) {
+        await qr.query(
+          `UPDATE public.proof_requests
+           SET status = 'expired'
+           WHERE id = $1`,
+          [id],
+        );
+        await qr.commitTransaction();
+        return res.status(400).json({ ok: false, error: "expired" });
+      }
+
+      const checkout = await reserveAccessCodeForPolicyTx(
+        qr,
+        String(locked.policy),
+        String(holderDid),
+        id,
+      );
+
+      await qr.query(
+        `UPDATE public.proof_requests
+         SET status = 'closed',
+             submitted_at = now(),
+             holder_did = $2,
+             vp_hash = $3,
+             vp_jwt = $4,
+             result = 'accepted',
+             error = NULL,
+             proof_json = $5::jsonb,
+             public_signals_json = $6::jsonb
+         WHERE id = $1`,
+        [
+          id,
+          String(holderDid),
+          vpHash ? String(vpHash) : null,
+          String(vpJwt),
+          JSON.stringify(proof),
+          JSON.stringify(publicSignals),
+        ],
+      );
+
+      await qr.commitTransaction();
+
+      return res.json({
+        ok: true,
+        status: "accepted",
+        checkout,
+      });
+    } catch (e: any) {
+      await qr.rollbackTransaction();
+      return res.status(409).json({
+        ok: false,
+        error: String(e?.message || "checkout_session_failed"),
+      });
+    } finally {
+      await qr.release();
+    }
   } finally {
     await d.destroy();
   }
@@ -2885,7 +3161,7 @@ app.post("/admin/proof-requests", requireAdmin, async (req, res) => {
 
     let constraints = normalizeConstraints(constraintsIn);
 
-    if (policy === "office_entry") {
+    if (policy === "office_entry.v1") {
       const alpha2 = String(
         constraints.expectedCitizenshipAlpha2 ??
           constraints.citizenshipAlpha2 ??
@@ -2965,6 +3241,60 @@ app.post("/admin/proof-requests", requireAdmin, async (req, res) => {
   }
 });
 
+app.post(
+  "/admin/eventbrite/events/:eventId/codes/import",
+  requireAdmin,
+  async (req, res) => {
+    const eventId = String(req.params.eventId || "").trim();
+    const codes = Array.isArray(req.body?.codes) ? req.body.codes : null;
+
+    if (!eventId) {
+      return res.status(400).json({ ok: false, error: "missing_event_id" });
+    }
+    if (!codes || !codes.length) {
+      return res.status(400).json({ ok: false, error: "missing_codes" });
+    }
+
+    const cleaned = Array.from(
+      new Set(codes.map((x: any) => String(x || "").trim()).filter(Boolean)),
+    );
+
+    const d = await ds();
+    try {
+      const ev = await d.query(
+        `SELECT event_id FROM public.eventbrite_events WHERE event_id = $1 LIMIT 1`,
+        [eventId],
+      );
+      if (!ev?.[0]) {
+        return res.status(404).json({ ok: false, error: "event_not_found" });
+      }
+
+      let inserted = 0;
+      for (const code of cleaned) {
+        const r = await d.query(
+          `
+        INSERT INTO public.eventbrite_access_codes (event_id, code, status)
+        VALUES ($1, $2, 'available')
+        ON CONFLICT (code) DO NOTHING
+        RETURNING id
+        `,
+          [eventId, code],
+        );
+        if (r?.[0]?.id) inserted += 1;
+      }
+
+      return res.json({
+        ok: true,
+        eventId,
+        received: cleaned.length,
+        inserted,
+      });
+    } finally {
+      await d.destroy();
+    }
+  },
+);
+
 app.get("/proof-requests/:id", async (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) return res.status(400).json({ ok: false, error: "bad_id" });
@@ -3007,6 +3337,110 @@ app.get("/proof-requests/:id", async (req, res) => {
     await d.destroy();
   }
 });
+
+app.get(
+  "/holder/event-access-sessions/:token",
+  requireHolder,
+  async (req, res) => {
+    const token = String(req.params.token || "").trim();
+    const holderDid = String((req as any).holder?.holderDid || "").trim();
+
+    if (!token) {
+      return res.status(400).json({ ok: false, error: "missing_token" });
+    }
+
+    const d = await ds();
+    const qr = d.createQueryRunner();
+    await qr.connect();
+    await qr.startTransaction();
+
+    try {
+      const rows = await qr.query(
+        `
+        SELECT s.session_token, s.event_id, s.holder_did, s.status, s.expires_at,
+               s.access_code_id,
+               e.title, e.eventbrite_event_id, e.checkout_url,
+               c.code, c.status AS code_status
+        FROM public.event_access_sessions s
+        JOIN public.eventbrite_events e ON e.event_id = s.event_id
+        LEFT JOIN public.eventbrite_access_codes c ON c.id = s.access_code_id
+        WHERE s.session_token = $1
+        FOR UPDATE
+        `,
+        [token],
+      );
+
+      const row = rows?.[0];
+      if (!row) {
+        await qr.rollbackTransaction();
+        return res.status(404).json({ ok: false, error: "not_found" });
+      }
+
+      if (String(row.holder_did) !== holderDid) {
+        await qr.rollbackTransaction();
+        return res.status(403).json({ ok: false, error: "forbidden" });
+      }
+
+      const exp = new Date(String(row.expires_at)).getTime();
+      const expired = Date.now() > exp;
+
+      if (expired && String(row.status) === "eligible") {
+        await qr.query(
+          `UPDATE public.event_access_sessions
+           SET status = 'expired'
+           WHERE session_token = $1`,
+          [token],
+        );
+
+        if (
+          row.access_code_id &&
+          String(row.code_status || "") === "reserved"
+        ) {
+          await qr.query(
+            `
+            UPDATE public.eventbrite_access_codes
+            SET status = 'available',
+                holder_did = NULL,
+                proof_request_id = NULL,
+                reserved_at = NULL
+            WHERE id = $1
+            `,
+            [row.access_code_id],
+          );
+        }
+
+        row.status = "expired";
+        row.code = null;
+      }
+
+      await qr.commitTransaction();
+
+      return res.json({
+        ok: true,
+        session: {
+          token: String(row.session_token),
+          eventId: String(row.event_id),
+          title: String(row.title),
+          status: String(row.status),
+          eventbriteEventId: String(row.eventbrite_event_id),
+          code: row.code ? String(row.code) : null,
+          checkoutUrl: String(row.checkout_url),
+          expiresAt: String(row.expires_at),
+        },
+      });
+    } catch (e: any) {
+      await qr.rollbackTransaction();
+      return res.status(500).json({
+        ok: false,
+        error: "session_read_failed",
+        message: String(e?.message || e),
+      });
+    } finally {
+      await qr.release();
+      await d.destroy();
+    }
+  },
+);
 
 app.get("/admin/proof-requests", requireAdmin, async (req, res) => {
   const status = String(req.query?.status || "open").toLowerCase();
