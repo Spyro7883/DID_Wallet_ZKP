@@ -508,6 +508,7 @@ async function reserveAccessCodeForPolicyTx(
       AND enabled = TRUE
     ORDER BY created_at ASC
     LIMIT 1
+    FOR UPDATE
     `,
     [policy],
   );
@@ -556,7 +557,7 @@ async function reserveAccessCodeForPolicyTx(
     `,
     [
       sessionToken,
-      ev.event_id,
+      String(ev.event_id),
       holderDid,
       proofRequestId,
       codeRow.id,
@@ -564,13 +565,17 @@ async function reserveAccessCodeForPolicyTx(
     ],
   );
 
+  const checkoutUrl =
+    `${String(ev.checkout_url).replace(/\/+$/, "")}` +
+    `?promo=${encodeURIComponent(String(codeRow.code))}`;
+
   return {
     sessionToken,
     eventId: String(ev.event_id),
     title: String(ev.title),
     eventbriteEventId: String(ev.eventbrite_event_id),
     code: String(codeRow.code),
-    checkoutUrl: String(ev.checkout_url),
+    checkoutUrl,
     expiresAt: expiresAt.toISOString(),
   };
 }

@@ -10,6 +10,7 @@ import {
     Platform,
     ScrollView,
     FlatList,
+    Linking,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { MaterialIcons } from "@expo/vector-icons";
@@ -45,6 +46,16 @@ type ProofRequest = {
     constraints: any;
     expiresAt: string;
     createdAt: string;
+};
+
+type CheckoutInfo = {
+    sessionToken: string;
+    eventId: string;
+    title: string;
+    eventbriteEventId?: string;
+    code: string;
+    checkoutUrl: string;
+    expiresAt: string;
 };
 
 type VCListItem = {
@@ -157,6 +168,7 @@ export default function ProofRequestScreen() {
     const [sending, setSending] = useState(false);
     const [result, setResult] = useState<{ ok: boolean; msg: string } | null>(null);
     const [proverReady, setProverReady] = useState(false);
+    const [checkout, setCheckout] = useState<CheckoutInfo | null>(null);
 
     const toggle = (hash: string) =>
         setSelected((prev) => {
@@ -178,6 +190,27 @@ export default function ProofRequestScreen() {
 
             return next;
         });
+
+    const openCheckout = useCallback(async () => {
+        try {
+            const url = String(checkout?.checkoutUrl || "").trim();
+            if (!url) return;
+
+            if (Platform.OS === "web") {
+                window.open(url, "_blank", "noopener,noreferrer");
+                return;
+            }
+
+            const supported = await Linking.canOpenURL(url);
+            if (!supported) {
+                throw new Error("cannot_open_checkout_url");
+            }
+
+            await Linking.openURL(url);
+        } catch (e: any) {
+            notify("Error", e?.message || "Could not open Eventbrite");
+        }
+    }, [checkout]);
 
     const loadHolderDid = useCallback(async () => {
         try {
@@ -528,6 +561,7 @@ export default function ProofRequestScreen() {
         setSending(true);
         setReqErr("");
         setResult(null);
+        setCheckout(null);
 
         try {
             if (!holderDid.trim()) throw new Error("missing_holder_did");
@@ -642,7 +676,27 @@ export default function ProofRequestScreen() {
                 throw new Error(subJson?.error || "submit_failed");
             }
 
-            setResult({ ok: true, msg: String(subJson.status || "accepted") });
+            const checkoutInfo = subJson.checkout
+                ? {
+                    sessionToken: String(subJson.checkout.sessionToken),
+                    eventId: String(subJson.checkout.eventId),
+                    title: String(subJson.checkout.title),
+                    eventbriteEventId: subJson.checkout.eventbriteEventId
+                        ? String(subJson.checkout.eventbriteEventId)
+                        : undefined,
+                    code: String(subJson.checkout.code),
+                    checkoutUrl: String(subJson.checkout.checkoutUrl),
+                    expiresAt: String(subJson.checkout.expiresAt),
+                }
+                : null;
+
+            setCheckout(checkoutInfo);
+            setResult({
+                ok: true,
+                msg: checkoutInfo
+                    ? "accepted - access granted"
+                    : String(subJson.status || "accepted"),
+            });
 
             const updatedReq = await fetchProofRequest(pr.id).catch(() => null);
             if (updatedReq) {
@@ -653,9 +707,16 @@ export default function ProofRequestScreen() {
 
             setSelected({});
             await loadVcs();
-            notify("Sent", "Proof submitted.");
+
+            notify(
+                "Sent",
+                checkoutInfo
+                    ? "Proof accepted. Event access reserved."
+                    : "Proof submitted.",
+            );
         } catch (e: any) {
             const msg = String(e?.message || e);
+            setCheckout(null);
 
             if (msg.startsWith("wallet_missing:")) {
                 notify(
@@ -682,6 +743,8 @@ export default function ProofRequestScreen() {
                 );
             } else if (msg === "prover_not_ready") {
                 notify("Prover", "ZK prover is not ready yet. Wait a few seconds.");
+            } else if (msg === "no_codes_available") {
+                notify("No tickets", "No Eventbrite access codes are available.");
             } else {
                 notify("Error", msg || "Could not generate/send proof");
             }
@@ -799,6 +862,21 @@ export default function ProofRequestScreen() {
                         <Text style={styles.cardSub}>
                             Context: {String(req.constraints.contextId ?? "-")}
                         </Text>
+                    </View>
+                ) : null}
+
+                {checkout ? (
+                    <View style={styles.card}>
+                        <Text style={styles.cardTitle}>Event access</Text>
+                        <Text style={styles.cardSub}>Event: {checkout.title}</Text>
+                        <Text style={styles.cardSub}>Code: {checkout.code}</Text>
+                        <Text style={styles.cardSub}>
+                            Expires: {fmtDateTime(checkout.expiresAt)}
+                        </Text>
+
+                        <Pressable onPress={openCheckout} style={styles.primaryBtn}>
+                            <Text style={styles.primaryText}>Open Eventbrite</Text>
+                        </Pressable>
                     </View>
                 ) : null}
 
@@ -1024,7 +1102,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
         borderWidth: 1,
         borderColor: COLORS.accentBorder,
-        marginTop: 6,
+        marginTop: 10,
     },
     primaryText: {
         fontSize: 14,
