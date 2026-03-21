@@ -805,14 +805,13 @@ export default function ProofRequestScreen() {
 
                     {!missingRequired.length && missingSelection.length ? (
                         <Text style={[styles.err, { marginTop: 10 }]}>
-                            Select: {missingSelection.join(", ")}
+                            Choose one credential for: {missingSelection.join(", ")}.
                         </Text>
                     ) : null}
 
                     {duplicateRequired.length ? (
                         <Text style={[styles.err, { marginTop: 10 }]}>
-                            Multiple credentials found for: {duplicateRequired.join(", ")}. Select one
-                            manually.
+                            Multiple credentials available for: {duplicateRequired.join(", ")}. Choose one for each.
                         </Text>
                     ) : null}
 
@@ -823,7 +822,7 @@ export default function ProofRequestScreen() {
 
                 {reqErr ? <Text style={styles.err}>{reqErr}</Text> : null}
 
-                {req ? (
+                {/* {req ? (
                     <View style={styles.card}>
                         <Text style={styles.cardTitle}>Session</Text>
                         <Text style={styles.cardSub}>policy: {req.policy}</Text>
@@ -841,7 +840,7 @@ export default function ProofRequestScreen() {
                             id: {req.id}
                         </Text>
                     </View>
-                ) : null}
+                ) : null} */}
 
                 {req?.constraints ? (
                     <View style={styles.card}>
@@ -859,9 +858,9 @@ export default function ProofRequestScreen() {
                             Income range: {String(req.constraints.L ?? "-")} -{" "}
                             {String(req.constraints.U ?? "-")}
                         </Text>
-                        <Text style={styles.cardSub}>
+                        {/* <Text style={styles.cardSub}>
                             Context: {String(req.constraints.contextId ?? "-")}
-                        </Text>
+                        </Text> */}
                     </View>
                 ) : null}
 
@@ -869,7 +868,7 @@ export default function ProofRequestScreen() {
                     <View style={styles.card}>
                         <Text style={styles.cardTitle}>Event access</Text>
                         <Text style={styles.cardSub}>Event: {checkout.title}</Text>
-                        <Text style={styles.cardSub}>Code: {checkout.code}</Text>
+                        <Text style={styles.cardSub}>Your Eventbrite access code: {checkout.code}</Text>
                         <Text style={styles.cardSub}>
                             Expires: {fmtDateTime(checkout.expiresAt)}
                         </Text>

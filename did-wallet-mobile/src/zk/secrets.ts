@@ -16,26 +16,39 @@ export type ZkSecretsBackup = {
   income: Record<string, any>;
 };
 
-const INDEX_KEY = "zk:index:v1";
+const INDEX_KEY = "zk_index_v1";
+const OLD_INDEX_KEY = "zk:index:v1";
+
+function isWeb() {
+  return Platform.OS === "web";
+}
+
+function safePart(value: string) {
+  const out = String(value ?? "").replace(/[^a-zA-Z0-9._-]/g, "_");
+  return out || "empty";
+}
 
 function legacyKey(kind: SecretKind, commit: string) {
-  const safeCommit = String(commit).replace(/[^a-zA-Z0-9._-]/g, "_");
-  return `zk_${kind}_${safeCommit}`;
+  return `zk_${safePart(kind)}_${safePart(commit)}`;
 }
 
 function currentKey(kind: SecretKind, commit: string) {
-  return `zk:${kind}:${String(commit)}`;
+  return `zk_v1_${safePart(kind)}_${safePart(commit)}`;
+}
+
+function oldBrokenCurrentKey(kind: SecretKind, commit: string) {
+  return `zk:${String(kind)}:${String(commit)}`;
 }
 
 async function getStored(key: string): Promise<string | null> {
-  if (Platform.OS === "web") {
+  if (isWeb()) {
     return localStorage.getItem(key);
   }
   return await SecureStore.getItemAsync(key);
 }
 
 async function setStored(key: string, value: string) {
-  if (Platform.OS === "web") {
+  if (isWeb()) {
     localStorage.setItem(key, value);
     return;
   }
@@ -43,7 +56,7 @@ async function setStored(key: string, value: string) {
 }
 
 async function deleteStored(key: string) {
-  if (Platform.OS === "web") {
+  if (isWeb()) {
     localStorage.removeItem(key);
     return;
   }
@@ -55,7 +68,17 @@ function emptyIndex(): ZkSecretsIndex {
 }
 
 async function loadIndex(): Promise<ZkSecretsIndex> {
-  const raw = await getStored(INDEX_KEY);
+  let raw = await getStored(INDEX_KEY);
+
+  if (!raw && isWeb()) {
+    raw = await getStored(OLD_INDEX_KEY);
+
+    if (raw) {
+      await setStored(INDEX_KEY, raw);
+      await deleteStored(OLD_INDEX_KEY);
+    }
+  }
+
   if (!raw) return emptyIndex();
 
   try {
@@ -75,7 +98,9 @@ async function saveIndex(index: ZkSecretsIndex) {
 }
 
 async function addCommitToIndex(kind: SecretKind, commit: string) {
-  const c = String(commit);
+  const c = String(commit ?? "");
+  if (!c) return;
+
   const index = await loadIndex();
   const arr = index[kind];
 
@@ -86,7 +111,9 @@ async function addCommitToIndex(kind: SecretKind, commit: string) {
 }
 
 async function removeCommitFromIndex(kind: SecretKind, commit: string) {
-  const c = String(commit);
+  const c = String(commit ?? "");
+  if (!c) return;
+
   const index = await loadIndex();
   index[kind] = index[kind].filter((x) => x !== c);
   await saveIndex(index);
@@ -97,27 +124,44 @@ export async function saveSecretByCommit(
   commit: string,
   payload: any,
 ) {
+  const c = String(commit ?? "");
+  if (!c) {
+    throw new Error("empty_commit");
+  }
+
   const raw = JSON.stringify(payload);
-  await setStored(currentKey(kind, commit), raw);
-  await addCommitToIndex(kind, commit);
+  await setStored(currentKey(kind, c), raw);
+  await addCommitToIndex(kind, c);
 }
 
 async function loadSecretByCommit(
   kind: SecretKind,
   commit: string,
 ): Promise<any | null> {
-  const newKey = currentKey(kind, commit);
-  const oldKey = legacyKey(kind, commit);
+  const c = String(commit ?? "");
+  if (!c) return null;
+
+  const newKey = currentKey(kind, c);
+  const oldLegacyKey = legacyKey(kind, c);
 
   let raw = await getStored(newKey);
 
   if (!raw) {
-    raw = await getStored(oldKey);
+    raw = await getStored(oldLegacyKey);
 
     if (raw) {
       await setStored(newKey, raw);
-      await deleteStored(oldKey);
-      await addCommitToIndex(kind, commit);
+      await deleteStored(oldLegacyKey);
+    }
+  }
+
+  if (!raw && isWeb()) {
+    const oldColonKey = oldBrokenCurrentKey(kind, c);
+    raw = await getStored(oldColonKey);
+
+    if (raw) {
+      await setStored(newKey, raw);
+      await deleteStored(oldColonKey);
     }
   }
 
@@ -125,7 +169,7 @@ async function loadSecretByCommit(
 
   try {
     const parsed = JSON.parse(raw);
-    await addCommitToIndex(kind, commit);
+    await addCommitToIndex(kind, c);
     return parsed;
   } catch {
     return null;
@@ -133,9 +177,17 @@ async function loadSecretByCommit(
 }
 
 export async function deleteSecretByCommit(kind: SecretKind, commit: string) {
-  await deleteStored(currentKey(kind, commit));
-  await deleteStored(legacyKey(kind, commit));
-  await removeCommitFromIndex(kind, commit);
+  const c = String(commit ?? "");
+  if (!c) return;
+
+  await deleteStored(currentKey(kind, c));
+  await deleteStored(legacyKey(kind, c));
+
+  if (isWeb()) {
+    await deleteStored(oldBrokenCurrentKey(kind, c));
+  }
+
+  await removeCommitFromIndex(kind, c);
 }
 
 export async function loadAgeSecret(ageCommit: string) {
@@ -220,17 +272,33 @@ export async function clearAllZkSecrets() {
   for (const commit of index.age) {
     await deleteStored(currentKey("age", commit));
     await deleteStored(legacyKey("age", commit));
+
+    if (isWeb()) {
+      await deleteStored(oldBrokenCurrentKey("age", commit));
+    }
   }
 
   for (const commit of index.cit) {
     await deleteStored(currentKey("cit", commit));
     await deleteStored(legacyKey("cit", commit));
+
+    if (isWeb()) {
+      await deleteStored(oldBrokenCurrentKey("cit", commit));
+    }
   }
 
   for (const commit of index.income) {
     await deleteStored(currentKey("income", commit));
     await deleteStored(legacyKey("income", commit));
+
+    if (isWeb()) {
+      await deleteStored(oldBrokenCurrentKey("income", commit));
+    }
   }
 
   await deleteStored(INDEX_KEY);
+
+  if (isWeb()) {
+    await deleteStored(OLD_INDEX_KEY);
+  }
 }
