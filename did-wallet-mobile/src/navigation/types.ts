@@ -16,4 +16,5 @@ export type RootStackParamList = {
   CreatePresentation: undefined;
 
   ProofRequest: { requestId?: string; link?: string } | undefined;
+  ProofHistory: undefined;
 };

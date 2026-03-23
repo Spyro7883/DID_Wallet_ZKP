@@ -17,6 +17,7 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 
 import { loadLastWallet } from "../src/storage/walletSession";
+import { saveProofHistoryItem } from "../src/storage/proofHistory";
 import { COLORS } from "../src/theme/colors";
 import {
     loadAgeSecret,
@@ -690,6 +691,19 @@ export default function ProofRequestScreen() {
                 }
                 : null;
 
+            await saveProofHistoryItem({
+                proofRequestId: pr.id,
+                policy: pr.policy,
+                holderDid: holderDid.trim(),
+                result: "accepted",
+                vpHash: vpHash || null,
+                eventId: checkoutInfo?.eventId ?? null,
+                eventTitle: checkoutInfo?.title ?? null,
+                accessCode: checkoutInfo?.code ?? null,
+                checkoutUrl: checkoutInfo?.checkoutUrl ?? null,
+                expiresAt: checkoutInfo?.expiresAt ?? null,
+            });
+
             setCheckout(checkoutInfo);
             setResult({
                 ok: true,
@@ -783,7 +797,13 @@ export default function ProofRequestScreen() {
                     </Pressable>
 
                     <Text style={styles.topTitle}>Proof request</Text>
-                    <View style={styles.topRight} />
+                    <Pressable
+                        onPress={() => navigation.navigate("ProofHistory")}
+                        hitSlop={10}
+                        style={styles.topRight}
+                    >
+                        <MaterialIcons name="history" size={22} color={COLORS.text} />
+                    </Pressable>
                 </View>
 
                 <View style={styles.card}>

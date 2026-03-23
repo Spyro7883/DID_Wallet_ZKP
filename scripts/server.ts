@@ -494,92 +494,6 @@ async function getProofPolicies(): Promise<Record<string, any>> {
   return (await getSetting("proof_policies")) ?? {};
 }
 
-async function reserveAccessCodeForPolicyTx(
-  qr: any,
-  policy: string,
-  holderDid: string,
-  proofRequestId: string,
-) {
-  const evRows = await qr.query(
-    `
-    SELECT event_id, title, policy, eventbrite_event_id, checkout_url, enabled
-    FROM public.eventbrite_events
-    WHERE policy = $1
-      AND enabled = TRUE
-    ORDER BY created_at ASC
-    LIMIT 1
-    FOR UPDATE
-    `,
-    [policy],
-  );
-
-  const ev = evRows?.[0];
-  if (!ev) throw new Error("event_not_found");
-  if (!ev.enabled) throw new Error("event_disabled");
-
-  const codeRows = await qr.query(
-    `
-    SELECT id, code
-    FROM public.eventbrite_access_codes
-    WHERE event_id = $1
-      AND status = 'available'
-    ORDER BY id ASC
-    LIMIT 1
-    FOR UPDATE SKIP LOCKED
-    `,
-    [ev.event_id],
-  );
-
-  const codeRow = codeRows?.[0];
-  if (!codeRow) throw new Error("no_codes_available");
-
-  await qr.query(
-    `
-    UPDATE public.eventbrite_access_codes
-    SET status = 'reserved',
-        holder_did = $2,
-        proof_request_id = $3,
-        reserved_at = now()
-    WHERE id = $1
-    `,
-    [codeRow.id, holderDid, proofRequestId],
-  );
-
-  const sessionToken = "ecs_" + rid(16);
-  const expiresAt = new Date(Date.now() + 10 * 60_000);
-
-  await qr.query(
-    `
-    INSERT INTO public.event_access_sessions
-      (session_token, event_id, holder_did, proof_request_id, access_code_id, status, expires_at)
-    VALUES
-      ($1, $2, $3, $4, $5, 'eligible', $6)
-    `,
-    [
-      sessionToken,
-      String(ev.event_id),
-      holderDid,
-      proofRequestId,
-      codeRow.id,
-      expiresAt.toISOString(),
-    ],
-  );
-
-  const checkoutUrl =
-    `${String(ev.checkout_url).replace(/\/+$/, "")}` +
-    `?promo=${encodeURIComponent(String(codeRow.code))}`;
-
-  return {
-    sessionToken,
-    eventId: String(ev.event_id),
-    title: String(ev.title),
-    eventbriteEventId: String(ev.eventbrite_event_id),
-    code: String(codeRow.code),
-    checkoutUrl,
-    expiresAt: expiresAt.toISOString(),
-  };
-}
-
 async function bootstrap() {
   await ensureAdminUsersTable();
   await ensureAdminSettingsTable();
@@ -618,6 +532,12 @@ setInterval(() => {
   for (const [token, exp] of TOKENS.entries()) {
     if (exp < t) TOKENS.delete(token);
   }
+}, 60_000);
+
+setInterval(() => {
+  void releaseExpiredAccessSessions().catch((e) => {
+    console.error("[event_access cleanup] error:", e?.message || e);
+  });
 }, 60_000);
 
 app.post("/requests/register", (req, res) => {
@@ -1647,10 +1567,16 @@ app.post("/wallets/items", async (req, res) => {
         ? vp.verifiableCredential.length
         : 0;
 
-      const created = (vp as any)?.proof?.created
-        ? String((vp as any).proof.created)
-        : "";
+      const createdRaw =
+        (vp as any)?.issuanceDate ||
+        (vp as any)?.createdAt ||
+        (vp as any)?.proof?.created ||
+        row.createdAt ||
+        "";
+
+      const created = createdRaw ? String(createdRaw) : "";
       const createdShort = created ? created.slice(0, 10) : "-";
+      const createdMs = created ? Date.parse(created) || 0 : 0;
 
       items.push({
         kind: "vp",
@@ -1658,7 +1584,7 @@ app.post("/wallets/items", async (req, res) => {
         title: "VP",
         line1: `Holder: ${holder}`,
         line2: `Created: ${createdShort} · VCs: ${vcCount}`,
-        _sort: created ? Date.parse(created) || 0 : 0,
+        _sort: createdMs,
       });
     }
 
@@ -2409,6 +2335,10 @@ async function ensureEventAccessSessionsTable() {
 
       CREATE INDEX IF NOT EXISTS event_access_sessions_proof_idx
       ON public.event_access_sessions(proof_request_id);
+
+      CREATE UNIQUE INDEX IF NOT EXISTS event_access_sessions_one_active_per_holder_event_idx
+      ON public.event_access_sessions(event_id, holder_did)
+      WHERE status = 'eligible';
     `);
   } finally {
     await d.destroy();
@@ -2443,6 +2373,261 @@ async function ensureDefaultEventbriteEvent() {
   } finally {
     await d.destroy();
   }
+}
+
+function buildCheckoutUrl(base: string, code: string) {
+  const clean = String(base || "").replace(/\/+$/, "");
+  return `${clean}?promo=${encodeURIComponent(String(code || ""))}`;
+}
+
+function mapCheckoutRow(row: any) {
+  return {
+    sessionToken: String(row.session_token),
+    eventId: String(row.event_id),
+    title: String(row.title),
+    eventbriteEventId: row.eventbrite_event_id
+      ? String(row.eventbrite_event_id)
+      : undefined,
+    code: String(row.code),
+    checkoutUrl: buildCheckoutUrl(String(row.checkout_url), String(row.code)),
+    expiresAt: String(row.expires_at),
+  };
+}
+
+async function releaseExpiredAccessSessionsTx(qr: any, eventId?: string) {
+  const params: any[] = [];
+  let where = `
+    s.status = 'eligible'
+    AND s.expires_at < now()
+  `;
+
+  if (eventId) {
+    params.push(String(eventId));
+    where += ` AND s.event_id = $${params.length}`;
+  }
+
+  const expiredRows = await qr.query(
+    `
+    SELECT s.id, s.access_code_id
+    FROM public.event_access_sessions s
+    WHERE ${where}
+    FOR UPDATE
+    `,
+    params,
+  );
+
+  if (!expiredRows?.length) return 0;
+
+  const sessionIds = expiredRows
+    .map((r: any) => Number(r.id))
+    .filter((x: number) => Number.isFinite(x));
+
+  const codeIds = expiredRows
+    .map((r: any) => Number(r.access_code_id))
+    .filter((x: number) => Number.isFinite(x));
+
+  if (sessionIds.length) {
+    await qr.query(
+      `
+      UPDATE public.event_access_sessions
+      SET status = 'expired'
+      WHERE id = ANY($1::bigint[])
+      `,
+      [sessionIds],
+    );
+  }
+
+  if (codeIds.length) {
+    await qr.query(
+      `
+      UPDATE public.eventbrite_access_codes
+      SET status = 'available',
+          holder_did = NULL,
+          proof_request_id = NULL,
+          reserved_at = NULL
+      WHERE id = ANY($1::bigint[])
+        AND status = 'reserved'
+      `,
+      [codeIds],
+    );
+  }
+
+  return sessionIds.length;
+}
+
+async function releaseExpiredAccessSessions(eventId?: string) {
+  const d = await ds();
+  const qr = d.createQueryRunner();
+  await qr.connect();
+  await qr.startTransaction();
+
+  try {
+    const count = await releaseExpiredAccessSessionsTx(qr, eventId);
+    await qr.commitTransaction();
+    return count;
+  } catch (e) {
+    await qr.rollbackTransaction();
+    throw e;
+  } finally {
+    await qr.release();
+    await d.destroy();
+  }
+}
+
+async function findActiveAccessSessionTx(
+  qr: any,
+  eventId: string,
+  holderDid: string,
+) {
+  const rows = await qr.query(
+    `
+    SELECT
+      s.session_token,
+      s.event_id,
+      s.expires_at,
+      e.title,
+      e.eventbrite_event_id,
+      e.checkout_url,
+      c.code
+    FROM public.event_access_sessions s
+    JOIN public.eventbrite_events e
+      ON e.event_id = s.event_id
+    JOIN public.eventbrite_access_codes c
+      ON c.id = s.access_code_id
+    WHERE s.event_id = $1
+      AND s.holder_did = $2
+      AND s.status = 'eligible'
+      AND s.expires_at > now()
+    ORDER BY s.created_at DESC
+    LIMIT 1
+    `,
+    [eventId, holderDid],
+  );
+
+  const row = rows?.[0];
+  return row ? mapCheckoutRow(row) : null;
+}
+
+async function reserveAccessCodeForEventTx(
+  qr: any,
+  eventId: string,
+  holderDid: string,
+  proofRequestId: string,
+) {
+  const evRows = await qr.query(
+    `
+    SELECT event_id, title, policy, eventbrite_event_id, checkout_url, enabled
+    FROM public.eventbrite_events
+    WHERE event_id = $1
+    LIMIT 1
+    `,
+    [eventId],
+  );
+
+  const ev = evRows?.[0];
+  if (!ev) throw new Error("event_not_found");
+  if (!ev.enabled) throw new Error("event_disabled");
+
+  await releaseExpiredAccessSessionsTx(qr, eventId);
+
+  const existing = await findActiveAccessSessionTx(
+    qr,
+    String(eventId),
+    String(holderDid),
+  );
+  if (existing) {
+    return existing;
+  }
+
+  const codeRows = await qr.query(
+    `
+    SELECT id, code
+    FROM public.eventbrite_access_codes
+    WHERE event_id = $1
+      AND status = 'available'
+    ORDER BY id ASC
+    LIMIT 1
+    FOR UPDATE SKIP LOCKED
+    `,
+    [eventId],
+  );
+
+  const codeRow = codeRows?.[0];
+  if (!codeRow) throw new Error("no_codes_available");
+
+  await qr.query(
+    `
+    UPDATE public.eventbrite_access_codes
+    SET status = 'reserved',
+        holder_did = $2,
+        proof_request_id = $3,
+        reserved_at = now()
+    WHERE id = $1
+    `,
+    [codeRow.id, holderDid, proofRequestId],
+  );
+
+  const sessionToken = "ecs_" + rid(16);
+  const expiresAt = new Date(Date.now() + 10 * 60_000);
+
+  await qr.query(
+    `
+    INSERT INTO public.event_access_sessions
+      (session_token, event_id, holder_did, proof_request_id, access_code_id, status, expires_at)
+    VALUES
+      ($1, $2, $3, $4, $5, 'eligible', $6)
+    `,
+    [
+      sessionToken,
+      eventId,
+      holderDid,
+      proofRequestId,
+      codeRow.id,
+      expiresAt.toISOString(),
+    ],
+  );
+
+  return {
+    sessionToken,
+    eventId: String(ev.event_id),
+    title: String(ev.title),
+    eventbriteEventId: String(ev.eventbrite_event_id),
+    code: String(codeRow.code),
+    checkoutUrl: buildCheckoutUrl(
+      String(ev.checkout_url),
+      String(codeRow.code),
+    ),
+    expiresAt: expiresAt.toISOString(),
+  };
+}
+
+async function reserveAccessCodeForPolicyTx(
+  qr: any,
+  policy: string,
+  holderDid: string,
+  proofRequestId: string,
+) {
+  const evRows = await qr.query(
+    `
+    SELECT event_id
+    FROM public.eventbrite_events
+    WHERE policy = $1
+      AND enabled = TRUE
+    ORDER BY created_at ASC
+    LIMIT 1
+    `,
+    [policy],
+  );
+
+  const ev = evRows?.[0];
+  if (!ev) throw new Error("event_not_found_for_policy");
+
+  return await reserveAccessCodeForEventTx(
+    qr,
+    String(ev.event_id),
+    holderDid,
+    proofRequestId,
+  );
 }
 
 app.post("/proof-requests/:id/submit", async (req, res) => {
@@ -3354,71 +3539,32 @@ app.get(
       return res.status(400).json({ ok: false, error: "missing_token" });
     }
 
-    const d = await ds();
-    const qr = d.createQueryRunner();
-    await qr.connect();
-    await qr.startTransaction();
+    await releaseExpiredAccessSessions();
 
+    const d = await ds();
     try {
-      const rows = await qr.query(
+      const rows = await d.query(
         `
         SELECT s.session_token, s.event_id, s.holder_did, s.status, s.expires_at,
-               s.access_code_id,
                e.title, e.eventbrite_event_id, e.checkout_url,
-               c.code, c.status AS code_status
+               c.code
         FROM public.event_access_sessions s
         JOIN public.eventbrite_events e ON e.event_id = s.event_id
         LEFT JOIN public.eventbrite_access_codes c ON c.id = s.access_code_id
         WHERE s.session_token = $1
-        FOR UPDATE
+        LIMIT 1
         `,
         [token],
       );
 
       const row = rows?.[0];
       if (!row) {
-        await qr.rollbackTransaction();
         return res.status(404).json({ ok: false, error: "not_found" });
       }
 
       if (String(row.holder_did) !== holderDid) {
-        await qr.rollbackTransaction();
         return res.status(403).json({ ok: false, error: "forbidden" });
       }
-
-      const exp = new Date(String(row.expires_at)).getTime();
-      const expired = Date.now() > exp;
-
-      if (expired && String(row.status) === "eligible") {
-        await qr.query(
-          `UPDATE public.event_access_sessions
-           SET status = 'expired'
-           WHERE session_token = $1`,
-          [token],
-        );
-
-        if (
-          row.access_code_id &&
-          String(row.code_status || "") === "reserved"
-        ) {
-          await qr.query(
-            `
-            UPDATE public.eventbrite_access_codes
-            SET status = 'available',
-                holder_did = NULL,
-                proof_request_id = NULL,
-                reserved_at = NULL
-            WHERE id = $1
-            `,
-            [row.access_code_id],
-          );
-        }
-
-        row.status = "expired";
-        row.code = null;
-      }
-
-      await qr.commitTransaction();
 
       return res.json({
         ok: true,
@@ -3429,19 +3575,13 @@ app.get(
           status: String(row.status),
           eventbriteEventId: String(row.eventbrite_event_id),
           code: row.code ? String(row.code) : null,
-          checkoutUrl: String(row.checkout_url),
+          checkoutUrl: row.code
+            ? buildCheckoutUrl(String(row.checkout_url), String(row.code))
+            : null,
           expiresAt: String(row.expires_at),
         },
       });
-    } catch (e: any) {
-      await qr.rollbackTransaction();
-      return res.status(500).json({
-        ok: false,
-        error: "session_read_failed",
-        message: String(e?.message || e),
-      });
     } finally {
-      await qr.release();
       await d.destroy();
     }
   },
