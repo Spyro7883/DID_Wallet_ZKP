@@ -1340,16 +1340,22 @@ app.post("/wallets/summary", async (req, res) => {
 
     const activeDid = dids[0]?.did ?? null;
 
-    const didItems = dids.map((d: any) => ({
-      id: d.did,
-      kind: "did" as const,
-      title: "[DID] " + (d.alias || "identity"),
-      subject: d.did,
-      issuedAt: d.createdAt
-        ? `Created: ${String(d.createdAt).slice(0, 19).replace("T", " ")}`
-        : "Created: -",
-      _sort: d.createdAt ? Date.parse(String(d.createdAt)) : 0,
-    }));
+    const didItems = dids.map((d: any) => {
+      const did = String(d.did || "");
+      const didShort = did ? did.slice(-8) : "unknown";
+      const alias = String(d.alias || "").trim();
+
+      return {
+        id: did,
+        kind: "did" as const,
+        title: alias ? `${alias} · ${didShort}` : `${didShort}`,
+        subject: did,
+        issuedAt: d.createdAt
+          ? `Created: ${String(d.createdAt).slice(0, 19).replace("T", " ")}`
+          : "Created: -",
+        _sort: d.createdAt ? Date.parse(String(d.createdAt)) : 0,
+      };
+    });
 
     const vcItems = vcs.map((row: any) => {
       const vc = row.verifiableCredential;
@@ -1366,11 +1372,13 @@ app.post("/wallets/summary", async (req, res) => {
           : undefined;
 
       const issuance = vc?.issuanceDate ? String(vc.issuanceDate) : "";
+      const hash = String(row.hash || "");
+      const hashShort = hash ? hash.slice(0, 8) : "unknown";
 
       return {
         id: row.hash,
         kind: "vc" as const,
-        title: `[Credential] ${mainType}`,
+        title: `${mainType} · ${hashShort}`,
         subject: `Subject: ${subjectId ?? "-"}`,
         issuedAt: issuance
           ? `Issued: ${issuance.slice(0, 19).replace("T", " ")}`
@@ -1388,10 +1396,13 @@ app.post("/wallets/summary", async (req, res) => {
         "";
       const holder = vp?.holder ?? "-";
 
+      const hash = String(row.hash || "");
+      const hashShort = hash ? hash.slice(0, 8) : "unknown";
+
       return {
         id: row.hash,
         kind: "vp" as const,
-        title: "[Presentation] VP",
+        title: `VP · ${hashShort}`,
         subject: `Holder: ${holder}`,
         issuedAt: created
           ? `Created: ${String(created).slice(0, 19).replace("T", " ")}`
