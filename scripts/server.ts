@@ -1346,7 +1346,7 @@ app.post("/wallets/summary", async (req, res) => {
       title: "[DID] " + (d.alias || "identity"),
       subject: d.did,
       issuedAt: d.createdAt
-        ? `Created: ${String(d.createdAt).slice(0, 10)}`
+        ? `Created: ${String(d.createdAt).slice(0, 19).replace("T", " ")}`
         : "Created: -",
       _sort: d.createdAt ? Date.parse(String(d.createdAt)) : 0,
     }));
@@ -1372,7 +1372,9 @@ app.post("/wallets/summary", async (req, res) => {
         kind: "vc" as const,
         title: `[Credential] ${mainType}`,
         subject: `Subject: ${subjectId ?? "-"}`,
-        issuedAt: issuance ? `Issued: ${issuance.slice(0, 10)}` : "Issued: -",
+        issuedAt: issuance
+          ? `Issued: ${issuance.slice(0, 19).replace("T", " ")}`
+          : "Issued: -",
         _sort: issuance ? Date.parse(issuance) : 0,
       };
     });
@@ -1392,7 +1394,7 @@ app.post("/wallets/summary", async (req, res) => {
         title: "[Presentation] VP",
         subject: `Holder: ${holder}`,
         issuedAt: created
-          ? `Created: ${String(created).slice(0, 10)}`
+          ? `Created: ${String(created).slice(0, 19).replace("T", " ")}`
           : "Created: -",
         _sort: created ? Date.parse(String(created)) : 0,
       };
@@ -1593,12 +1595,16 @@ app.post("/wallets/items", async (req, res) => {
         "";
 
       const createdStr = created ? String(created) : "";
-      const createdShort = createdStr ? createdStr.slice(0, 10) : "-";
+      const createdShort = createdStr
+        ? createdStr.slice(0, 19).replace("T", " ")
+        : "-";
+
+      const hashShort = String(row.hash || "").slice(0, 8);
 
       items.push({
         kind: "vp",
         id: row.hash,
-        title: "VP",
+        title: `VP · ${hashShort}`,
         line1: `Holder: ${holder}`,
         line2: `Created: ${createdShort} · VCs: ${vcCount}`,
         _sort: createdStr ? Date.parse(createdStr) || 0 : 0,
