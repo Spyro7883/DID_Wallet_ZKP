@@ -10,7 +10,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <Sidebar />
             <Box sx={{ flex: 1 }}>
                 <Topbar />
-                <Toolbar /> {/* spacer pentru AppBar */}
+                <Toolbar />
                 <Box sx={{ p: 3 }}>{children}</Box>
             </Box>
         </Box>
