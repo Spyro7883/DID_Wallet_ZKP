@@ -1554,13 +1554,18 @@ app.post("/wallets/items", async (req, res) => {
     const items: any[] = [];
 
     for (const d of dids) {
+      const createdAt = d.createdAt ? String(d.createdAt) : "";
+      const createdShort = createdAt
+        ? createdAt.slice(0, 19).replace("T", " ")
+        : "-";
+
       items.push({
         kind: "did",
         id: d.did,
-        title: d.alias || "DID",
+        title: `${d.alias || "identity"}`,
         line1: d.did,
-        line2: `Provider: ${d.provider} · Keys: ${d.keys?.length ?? 0}`,
-        _sort: 0,
+        line2: `Created: ${createdShort}`,
+        _sort: createdAt ? Date.parse(createdAt) || 0 : 0,
       });
     }
 
@@ -1579,12 +1584,16 @@ app.post("/wallets/items", async (req, res) => {
           : undefined;
 
       const issuance = vc?.issuanceDate ? String(vc.issuanceDate) : "";
-      const issuedShort = issuance ? issuance.slice(0, 10) : "-";
+      const issuedShort = issuance
+        ? issuance.slice(0, 19).replace("T", " ")
+        : "-";
+      const hash = String(row.hash || "");
+      const hashShort = hash ? hash.slice(0, 8) : "unknown";
 
       items.push({
         kind: "vc",
         id: row.hash,
-        title: mainType,
+        title: `${mainType} · ${hashShort}`,
         line1: `Subject: ${subjectId ?? "-"}`,
         line2: `Issued: ${issuedShort}`,
         _sort: issuance ? Date.parse(issuance) || 0 : 0,
