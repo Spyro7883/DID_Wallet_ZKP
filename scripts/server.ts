@@ -1585,16 +1585,15 @@ app.post("/wallets/items", async (req, res) => {
         ? vp.verifiableCredential.length
         : 0;
 
-      const createdRaw =
+      const created =
+        (vp as any)?.proof?.created ||
         (vp as any)?.issuanceDate ||
         (vp as any)?.createdAt ||
-        (vp as any)?.proof?.created ||
         row.createdAt ||
         "";
 
-      const created = createdRaw ? String(createdRaw) : "";
-      const createdShort = created ? created.slice(0, 10) : "-";
-      const createdMs = created ? Date.parse(created) || 0 : 0;
+      const createdStr = created ? String(created) : "";
+      const createdShort = createdStr ? createdStr.slice(0, 10) : "-";
 
       items.push({
         kind: "vp",
@@ -1602,7 +1601,7 @@ app.post("/wallets/items", async (req, res) => {
         title: "VP",
         line1: `Holder: ${holder}`,
         line2: `Created: ${createdShort} · VCs: ${vcCount}`,
-        _sort: createdMs,
+        _sort: createdStr ? Date.parse(createdStr) || 0 : 0,
       });
     }
 
