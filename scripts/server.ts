@@ -936,14 +936,28 @@ app.post("/vc/requests", requireHolder, async (req, res) => {
       policy.maxValidityDays,
     );
 
+    const previewClaimsIn =
+      req.body?.previewClaims &&
+      typeof req.body.previewClaims === "object" &&
+      !Array.isArray(req.body.previewClaims)
+        ? req.body.previewClaims
+        : {};
+
     const d = await ds();
     try {
       const rows = await d.query(
         `INSERT INTO public.vc_requests
-         (status, holder_did, subject_did, vc_type, claims, validity_days)
-         VALUES ('pending', $1, $2, $3, $4::jsonb, $5)
+         (status, holder_did, subject_did, vc_type, claims, preview_claims, validity_days)
+         VALUES ('pending', $1, $2, $3, $4::jsonb, $5::jsonb, $6)
          RETURNING id, status, created_at`,
-        [holderDid, subjectDid, type, JSON.stringify(claims), validityDays],
+        [
+          holderDid,
+          subjectDid,
+          type,
+          JSON.stringify(claims),
+          JSON.stringify(previewClaimsIn),
+          validityDays,
+        ],
       );
 
       const r = rows?.[0];
@@ -1263,7 +1277,7 @@ app.get("/admin/vc/requests/:id", requireAdmin, async (req, res) => {
   const d = await ds();
   try {
     const rows = await d.query(
-      `SELECT id, status, holder_did, subject_did, vc_type, claims, validity_days,
+      `SELECT id, status, holder_did, subject_did, vc_type, claims, preview_claims, validity_days,
               created_at, decided_at, decided_by, decision_note, issued_vc_hash
        FROM public.vc_requests
        WHERE id = $1
@@ -1272,7 +1286,11 @@ app.get("/admin/vc/requests/:id", requireAdmin, async (req, res) => {
     );
     const row = rows?.[0];
     if (!row) return res.status(404).json({ ok: false, error: "not_found" });
-    return res.json({ ok: true, request: row });
+    return res.json({
+      ok: true,
+      request: row,
+      preview_claims: row.preview_claims ?? {},
+    });
   } finally {
     await d.destroy();
   }
@@ -2192,6 +2210,7 @@ async function ensureVcRequestsTable() {
         subject_did TEXT NOT NULL,
         vc_type TEXT NOT NULL,
         claims JSONB NOT NULL DEFAULT '{}'::jsonb,
+        preview_claims JSONB NOT NULL DEFAULT '{}'::jsonb,
         validity_days INT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         decided_at TIMESTAMPTZ,
@@ -2200,6 +2219,9 @@ async function ensureVcRequestsTable() {
         issued_vc_hash TEXT,
         issued_vc_jwt TEXT
       );
+
+      ALTER TABLE public.vc_requests
+        ADD COLUMN IF NOT EXISTS preview_claims JSONB NOT NULL DEFAULT '{}'::jsonb;
 
       CREATE INDEX IF NOT EXISTS vc_requests_status_idx ON public.vc_requests(status);
       CREATE INDEX IF NOT EXISTS vc_requests_holder_idx ON public.vc_requests(holder_did);

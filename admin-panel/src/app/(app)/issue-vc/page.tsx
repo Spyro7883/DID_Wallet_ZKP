@@ -40,6 +40,7 @@ type RequestRow = {
 
 type RequestDetail = RequestRow & {
     claims: any;
+    preview_claims?: any;
     validity_days: number | null;
     decision_note?: string | null;
     issued_vc_jwt?: string | null;
@@ -305,7 +306,18 @@ export default function Page() {
                                     <Typography variant="body2" color="text.secondary">
                                         Validity days: <b>{selected.validity_days ?? "-"}</b>
                                     </Typography>
+
                                 </Stack>
+
+                                <TextField
+                                    label="Preview claims"
+                                    value={pretty(selected.preview_claims)}
+                                    fullWidth
+                                    multiline
+                                    minRows={4}
+                                    InputProps={{ readOnly: true } as any}
+                                    sx={{ mt: 2 }}
+                                />
 
                                 <TextField
                                     label="Claims"

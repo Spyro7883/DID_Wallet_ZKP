@@ -74,6 +74,17 @@ export default function ProofHistoryScreen() {
     }, []);
 
     const onClearAll = useCallback(() => {
+        if (Platform.OS === "web") {
+            const ok = window.confirm("Delete all saved proof/access history?");
+            if (!ok) return;
+
+            void (async () => {
+                await clearProofHistory();
+                await refresh();
+            })();
+            return;
+        }
+
         Alert.alert(
             "Clear history",
             "Delete all saved proof/access history?",
@@ -93,6 +104,17 @@ export default function ProofHistoryScreen() {
 
     const onDeleteOne = useCallback(
         (localId: string) => {
+            if (Platform.OS === "web") {
+                const ok = window.confirm("Remove this history entry?");
+                if (!ok) return;
+
+                void (async () => {
+                    await removeProofHistoryItem(localId);
+                    await refresh();
+                })();
+                return;
+            }
+
             Alert.alert(
                 "Delete entry",
                 "Remove this history entry?",
@@ -148,7 +170,12 @@ export default function ProofHistoryScreen() {
                 ) : null}
 
                 {items.map((item) => {
-                    const expired = isExpired(item.expiresAt);
+                    const accessExpired = isExpired(item.expiresAt);
+                    const hasEventAccess = !!(
+                        item.eventTitle ||
+                        item.accessCode ||
+                        item.checkoutUrl
+                    );
 
                     return (
                         <View key={item.localId} style={styles.card}>
@@ -176,7 +203,7 @@ export default function ProofHistoryScreen() {
                                 <Text style={styles.err}>Error: {item.error}</Text>
                             ) : null}
 
-                            {item.eventTitle || item.accessCode ? (
+                            {hasEventAccess && !accessExpired ? (
                                 <View style={styles.section}>
                                     <Text style={styles.sectionTitle}>Event access</Text>
 
@@ -189,12 +216,7 @@ export default function ProofHistoryScreen() {
                                     ) : null}
 
                                     {item.expiresAt ? (
-                                        <Text
-                                            style={[
-                                                styles.cardSub,
-                                                expired ? styles.warnText : undefined,
-                                            ]}
-                                        >
+                                        <Text style={styles.cardSub}>
                                             Expires: {fmtDateTime(item.expiresAt)}
                                         </Text>
                                     ) : null}
@@ -202,7 +224,7 @@ export default function ProofHistoryScreen() {
                                     {item.checkoutUrl ? (
                                         <Pressable
                                             onPress={() => openCheckout(item.checkoutUrl)}
-                                            style={[styles.primaryBtn, expired && { opacity: 0.6 }]}
+                                            style={styles.primaryBtn}
                                         >
                                             <Text style={styles.primaryText}>Open Eventbrite</Text>
                                         </Pressable>

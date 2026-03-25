@@ -113,21 +113,28 @@ async function buildAgeClaims(dateOfBirth: string) {
         dateOfBirth,
     });
 
-    return { ageCommit };
+    return {
+        claims: { ageCommit },
+        previewClaims: { age },
+    };
 }
 
 async function buildCitizenshipClaims(citizenship: string) {
-    const citizenshipNum = alpha2ToNumericDemo(citizenship);
+    const citizenshipAlpha2 = String(citizenship).toUpperCase().trim();
+    const citizenshipNum = alpha2ToNumericDemo(citizenshipAlpha2);
     const saltCit = await randomSalt31();
     const citizenshipCommit = await poseidon2(citizenshipNum, saltCit);
 
     await saveSecretByCommit("cit", citizenshipCommit, {
         citizenship: citizenshipNum.toString(),
         saltCit: saltCit.toString(),
-        citizenshipAlpha2: String(citizenship).toUpperCase().trim(),
+        citizenshipAlpha2,
     });
 
-    return { citizenshipCommit };
+    return {
+        claims: { citizenshipCommit },
+        previewClaims: { citizenshipAlpha2 },
+    };
 }
 
 async function buildIncomeClaims(incomeText: string, currency: string) {
@@ -154,7 +161,13 @@ async function buildIncomeClaims(incomeText: string, currency: string) {
         currency: cur,
     });
 
-    return { incomeCommit, currency: cur };
+    return {
+        claims: { incomeCommit, currency: cur },
+        previewClaims: {
+            income: Number(incomeText),
+            currency: cur,
+        },
+    };
 }
 
 export default function CreateCredentialScreen() {
@@ -374,23 +387,31 @@ export default function CreateCredentialScreen() {
             }
 
             let claims: any = {};
+            let previewClaims: any = {};
 
             if (type === "AgeCredential") {
-                claims = await buildAgeClaims(dob);
+                const built = await buildAgeClaims(dob);
+                claims = built.claims;
+                previewClaims = built.previewClaims;
             }
 
             if (type === "CitizenshipCredential") {
-                claims = await buildCitizenshipClaims(citizenship);
+                const built = await buildCitizenshipClaims(citizenship);
+                claims = built.claims;
+                previewClaims = built.previewClaims;
             }
 
             if (type === "IncomeCredential") {
-                claims = await buildIncomeClaims(income, currency);
+                const built = await buildIncomeClaims(income, currency);
+                claims = built.claims;
+                previewClaims = built.previewClaims;
             }
 
             const body = {
                 type,
                 validityDays: days,
                 claims,
+                previewClaims,
             };
 
             const resp = await fetch(`${BASE_URL}/vc/requests`, {
