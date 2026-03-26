@@ -18,7 +18,8 @@ import { useNavigation } from "@react-navigation/native";
 
 import { loadLastWallet } from "../src/storage/walletSession";
 import { saveProofHistoryItem } from "../src/storage/proofHistory";
-import { COLORS } from "../src/theme/colors";
+import { type AppColors } from "../src/theme/colors";
+import { useAppTheme } from "../src/theme/AppThemeProvider";
 import {
     loadAgeSecret,
     loadCitizenshipSecret,
@@ -157,6 +158,10 @@ async function getLocalPreviewForVc(
 }
 
 export default function ProofRequestScreen() {
+    const { colors } = useAppTheme();
+    const COLORS = colors;
+    const styles = useMemo(() => createStyles(COLORS), [COLORS]);
+
     const navigation = useNavigation<any>();
     const insets = useSafeAreaInsets();
 
@@ -842,26 +847,6 @@ export default function ProofRequestScreen() {
 
                 {reqErr ? <Text style={styles.err}>{reqErr}</Text> : null}
 
-                {/* {req ? (
-                    <View style={styles.card}>
-                        <Text style={styles.cardTitle}>Session</Text>
-                        <Text style={styles.cardSub}>policy: {req.policy}</Text>
-                        <Text style={styles.cardSub}>
-                            status: {String(req.status).toUpperCase()}
-                        </Text>
-                        <Text style={styles.cardSub}>expires: {fmtDateTime(req.expiresAt)}</Text>
-                        <Text style={styles.cardSub}>
-                            constraints: {JSON.stringify(req.constraints ?? {})}
-                        </Text>
-                        <Text
-                            style={[styles.cardSub, { marginTop: 6 }]}
-                            numberOfLines={1}
-                        >
-                            id: {req.id}
-                        </Text>
-                    </View>
-                ) : null} */}
-
                 {req?.constraints ? (
                     <View style={styles.card}>
                         <Text style={styles.cardTitle}>Verifier rules</Text>
@@ -878,9 +863,6 @@ export default function ProofRequestScreen() {
                             Income range: {String(req.constraints.L ?? "-")} -{" "}
                             {String(req.constraints.U ?? "-")}
                         </Text>
-                        {/* <Text style={styles.cardSub}>
-                            Context: {String(req.constraints.contextId ?? "-")}
-                        </Text> */}
                     </View>
                 ) : null}
 
@@ -1030,103 +1012,104 @@ export default function ProofRequestScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: COLORS.bg,
-        paddingHorizontal: 16,
-        paddingBottom: 16,
-    },
-    topBar: {
-        height: 48,
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 12,
-    },
-    topLeft: { position: "absolute", left: 0, padding: 4 },
-    topRight: { position: "absolute", right: 0, width: 28, height: 28 },
-    topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
-    label: {
-        fontSize: 12,
-        color: COLORS.muted,
-        marginBottom: 6,
-        marginTop: 10,
-        letterSpacing: 0.2,
-    },
-    input: {
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        borderRadius: 12,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        color: COLORS.text,
-        backgroundColor: COLORS.inputBg,
-        fontSize: 14,
-        ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
-    },
-    smallBtn: {
-        backgroundColor: COLORS.accentBg,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-    },
-    smallBtnText: {
-        color: COLORS.accentText,
-        fontWeight: "600",
-        fontSize: 12,
-    },
-    err: { color: "#F87171", marginTop: 8, fontSize: 12 },
-    card: {
-        marginTop: 12,
-        borderRadius: 14,
-        padding: 12,
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        backgroundColor: COLORS.card,
-    },
-    cardTitle: { color: COLORS.text, fontWeight: "600", fontSize: 14 },
-    cardSub: { color: COLORS.muted, marginTop: 4, fontSize: 12 },
-    chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-    chip: {
-        backgroundColor: COLORS.accentBg,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-    },
-    chipText: { color: COLORS.accentText, fontWeight: "600", fontSize: 12 },
-    vcRow: {
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        borderRadius: 14,
-        padding: 12,
-        marginBottom: 10,
-        backgroundColor: COLORS.card,
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-    },
-    vcRowOn: { borderColor: "rgba(216,180,254,0.85)" },
-    vcTitle: { color: COLORS.text, fontWeight: "600", fontSize: 13 },
-    vcSub: { color: COLORS.subtle, marginTop: 2, fontSize: 11 },
-    vcRowDisabled: { opacity: 0.45 },
-    vcWarn: { color: "#F59E0B", marginTop: 4, fontSize: 11 },
-    primaryBtn: {
-        backgroundColor: COLORS.accentBg,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-        marginTop: 10,
-    },
-    primaryText: {
-        fontSize: 14,
-        fontWeight: "600",
-        color: COLORS.accentText,
-    },
-    result: { marginTop: 10, fontSize: 12 },
-});
+const createStyles = (COLORS: AppColors) =>
+    StyleSheet.create({
+        container: {
+            flex: 1,
+            backgroundColor: COLORS.bg,
+            paddingHorizontal: 16,
+            paddingBottom: 16,
+        },
+        topBar: {
+            height: 48,
+            justifyContent: "center",
+            alignItems: "center",
+            marginBottom: 12,
+        },
+        topLeft: { position: "absolute", left: 0, padding: 4 },
+        topRight: { position: "absolute", right: 0, width: 28, height: 28 },
+        topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
+        label: {
+            fontSize: 12,
+            color: COLORS.muted,
+            marginBottom: 6,
+            marginTop: 10,
+            letterSpacing: 0.2,
+        },
+        input: {
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            borderRadius: 12,
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            color: COLORS.text,
+            backgroundColor: COLORS.inputBg,
+            fontSize: 14,
+            ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
+        },
+        smallBtn: {
+            backgroundColor: COLORS.accentBg,
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+        },
+        smallBtnText: {
+            color: COLORS.accentText,
+            fontWeight: "600",
+            fontSize: 12,
+        },
+        err: { color: "#F87171", marginTop: 8, fontSize: 12 },
+        card: {
+            marginTop: 12,
+            borderRadius: 14,
+            padding: 12,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+        },
+        cardTitle: { color: COLORS.text, fontWeight: "600", fontSize: 14 },
+        cardSub: { color: COLORS.muted, marginTop: 4, fontSize: 12 },
+        chipsRow: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+        chip: {
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+            paddingHorizontal: 10,
+            paddingVertical: 6,
+        },
+        chipText: { color: COLORS.accentText, fontWeight: "600", fontSize: 12 },
+        vcRow: {
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            borderRadius: 14,
+            padding: 12,
+            marginBottom: 10,
+            backgroundColor: COLORS.card,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+        },
+        vcRowOn: { borderColor: COLORS.accentBorder },
+        vcTitle: { color: COLORS.text, fontWeight: "600", fontSize: 13 },
+        vcSub: { color: COLORS.subtle, marginTop: 2, fontSize: 11 },
+        vcRowDisabled: { opacity: 0.45 },
+        vcWarn: { color: "#F59E0B", marginTop: 4, fontSize: 11 },
+        primaryBtn: {
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 14,
+            paddingVertical: 12,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+            marginTop: 10,
+        },
+        primaryText: {
+            fontSize: 14,
+            fontWeight: "600",
+            color: COLORS.accentText,
+        },
+        result: { marginTop: 10, fontSize: 12 },
+    });

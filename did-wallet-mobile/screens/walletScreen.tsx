@@ -17,8 +17,10 @@ import type { RootStackParamList } from "../src/navigation/types";
 import { loadLastWallet, clearLastWallet } from "../src/storage/walletSession";
 import SettingsSheet from "./settings";
 import { ItemDetailsPopup } from "./itemDetailsPopup";
-import { COLORS } from "../src/theme/colors";
 import ConnectIssuerSheet from "./connectIssuer";
+
+import { type AppColors } from "../src/theme/colors";
+import { useAppTheme } from "../src/theme/AppThemeProvider";
 
 type WalletRouteProp = RouteProp<RootStackParamList, "Wallet">;
 
@@ -39,6 +41,10 @@ type Summary = {
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 export default function WalletScreen() {
+    const { colors } = useAppTheme();
+    const COLORS = colors;
+    const styles = useMemo(() => createStyles(COLORS), [COLORS]);
+
     const route = useRoute<WalletRouteProp>();
     const navigation = useNavigation<any>();
 
@@ -292,6 +298,7 @@ export default function WalletScreen() {
                     setDetailsData(null);
                 }}
             />
+
             <ConnectIssuerSheet
                 visible={connectOpen}
                 onClose={() => setConnectOpen(false)}
@@ -300,87 +307,88 @@ export default function WalletScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.bg },
-    content: { paddingHorizontal: 16, paddingBottom: 24 },
+const createStyles = (COLORS: AppColors) =>
+    StyleSheet.create({
+        container: { flex: 1, backgroundColor: COLORS.bg },
+        content: { paddingHorizontal: 16, paddingBottom: 24 },
 
-    topBar: {
-        height: 48,
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-        marginBottom: 8,
-    },
-    topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
+        topBar: {
+            height: 48,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 8,
+        },
+        topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
 
-    iconBtn: {
-        backgroundColor: COLORS.accentBg,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-    },
+        iconBtn: {
+            backgroundColor: COLORS.accentBg,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+        },
 
-    subTitle: { color: COLORS.subtle, fontSize: 12, marginBottom: 10 },
+        subTitle: { color: COLORS.subtle, fontSize: 12, marginBottom: 10 },
 
-    identityCard: {
-        borderRadius: 16,
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        backgroundColor: COLORS.card,
-        marginBottom: 14,
-    },
-    identityName: { fontSize: 16, fontWeight: "600", color: COLORS.text, marginBottom: 4 },
-    identityLabel: { fontSize: 12, color: COLORS.muted },
-    identityDid: { fontSize: 12, color: COLORS.text, marginTop: 4, marginBottom: 10 },
-    identityStatsRow: { flexDirection: "row", justifyContent: "space-between" },
-    identityStat: { fontSize: 12, color: COLORS.muted },
+        identityCard: {
+            borderRadius: 16,
+            paddingHorizontal: 16,
+            paddingVertical: 14,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+            marginBottom: 14,
+        },
+        identityName: { fontSize: 16, fontWeight: "600", color: COLORS.text, marginBottom: 4 },
+        identityLabel: { fontSize: 12, color: COLORS.muted },
+        identityDid: { fontSize: 12, color: COLORS.text, marginTop: 4, marginBottom: 10 },
+        identityStatsRow: { flexDirection: "row", justifyContent: "space-between" },
+        identityStat: { fontSize: 12, color: COLORS.muted },
 
-    primaryButton: {
-        backgroundColor: COLORS.accentBg,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-        marginBottom: 18,
-    },
-    primaryButtonText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
+        primaryButton: {
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 14,
+            paddingVertical: 12,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+            marginBottom: 18,
+        },
+        primaryButtonText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
 
-    sectionHeader: {
-        flexDirection: "row",
-        alignItems: "center",
-        marginBottom: 10,
-    },
-    sectionTitle: { fontSize: 13, fontWeight: "600", color: COLORS.text },
-    sectionLink: { fontSize: 12, color: COLORS.link, fontWeight: "600" },
+        sectionHeader: {
+            flexDirection: "row",
+            alignItems: "center",
+            marginBottom: 10,
+        },
+        sectionTitle: { fontSize: 13, fontWeight: "600", color: COLORS.text },
+        sectionLink: { fontSize: 12, color: COLORS.link, fontWeight: "600" },
 
-    itemsList: { gap: 10 },
+        itemsList: { gap: 10 },
 
-    itemCard: {
-        borderRadius: 14,
-        paddingHorizontal: 12,
-        paddingVertical: 12,
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        backgroundColor: COLORS.card,
-    },
-    cardRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
-    badge: {
-        backgroundColor: COLORS.accentBg,
-        borderRadius: 10,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-    },
-    badgeText: { fontSize: 11, fontWeight: "600", color: COLORS.accentText },
+        itemCard: {
+            borderRadius: 14,
+            paddingHorizontal: 12,
+            paddingVertical: 12,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+        },
+        cardRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
+        badge: {
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 10,
+            paddingHorizontal: 8,
+            paddingVertical: 4,
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+        },
+        badgeText: { fontSize: 11, fontWeight: "600", color: COLORS.accentText },
 
-    itemTitle: { fontSize: 13, fontWeight: "600", color: COLORS.text },
-    itemSubtitle: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
+        itemTitle: { fontSize: 13, fontWeight: "600", color: COLORS.text },
+        itemSubtitle: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
 
-    empty: { color: COLORS.subtle, marginTop: 6 },
-});
+        empty: { color: COLORS.subtle, marginTop: 6 },
+    });

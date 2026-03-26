@@ -22,9 +22,9 @@ import * as Sharing from "expo-sharing";
 
 import { loadLastWallet } from "../src/storage/walletSession";
 import { ensureBackupsDir } from "../src/storage/backups";
-import { COLORS } from "../src/theme/colors";
-
 import { exportZkSecrets } from "../src/zk/secrets";
+import { type AppColors } from "../src/theme/colors";
+import { useAppTheme } from "../src/theme/AppThemeProvider";
 
 type Summary = {
     activeDid: string | null;
@@ -50,6 +50,10 @@ function SuccessSheet({
     fileUri: string | null;
     onClose: () => void;
 }) {
+    const { colors, resolvedMode } = useAppTheme();
+    const COLORS = colors;
+    const styles = useMemo(() => createStyles(COLORS), [COLORS]);
+
     const translateY = useRef(new Animated.Value(420)).current;
     const [mounted, setMounted] = useState(visible);
 
@@ -75,6 +79,10 @@ function SuccessSheet({
     }, [visible, mounted, translateY]);
 
     const canShare = !!fileUri;
+    const isDark = resolvedMode === "dark";
+
+    const overlayColor = isDark ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.35)";
+    const handleColor = isDark ? "rgba(255,255,255,0.35)" : "rgba(17,24,39,0.25)";
 
     const onShare = async () => {
         if (!fileUri) return;
@@ -98,10 +106,13 @@ function SuccessSheet({
 
     return (
         <Modal transparent visible={mounted} animationType="none" onRequestClose={onClose}>
-            <Pressable style={styles.sheetOverlay} onPress={onClose} />
+            <Pressable
+                style={[styles.sheetOverlay, { backgroundColor: overlayColor }]}
+                onPress={onClose}
+            />
 
             <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-                <View style={styles.sheetHandle} />
+                <View style={[styles.sheetHandle, { backgroundColor: handleColor }]} />
                 <Text style={styles.sheetTitle}>Backup created</Text>
                 <Text style={styles.sheetSub} numberOfLines={1} ellipsizeMode="middle">
                     {filename}
@@ -128,6 +139,10 @@ function SuccessSheet({
 }
 
 export default function BackupScreen() {
+    const { colors } = useAppTheme();
+    const COLORS = colors;
+    const styles = useMemo(() => createStyles(COLORS), [COLORS]);
+
     const navigation = useNavigation<any>();
 
     const [loading, setLoading] = useState(true);
@@ -366,6 +381,7 @@ export default function BackupScreen() {
                                             secureTextEntry={!showPass1}
                                             autoCapitalize="none"
                                             style={styles.input}
+                                            {...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {})}
                                         />
                                         <Pressable hitSlop={10} onPress={() => setShowPass1((v) => !v)}>
                                             <MaterialIcons
@@ -389,6 +405,7 @@ export default function BackupScreen() {
                                             secureTextEntry={!showPass2}
                                             autoCapitalize="none"
                                             style={styles.input}
+                                            {...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {})}
                                         />
                                         <Pressable hitSlop={10} onPress={() => setShowPass2((v) => !v)}>
                                             <MaterialIcons
@@ -436,106 +453,106 @@ export default function BackupScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.bg },
-    content: { paddingHorizontal: 16, paddingBottom: 24 },
+const createStyles = (COLORS: AppColors) =>
+    StyleSheet.create({
+        container: { flex: 1, backgroundColor: COLORS.bg },
+        content: { paddingHorizontal: 16, paddingBottom: 24 },
 
-    topBar: {
-        height: 48,
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 8,
-    },
-    topLeft: { position: "absolute", left: 0, padding: 4 },
-    topRight: { position: "absolute", right: 0, width: 28, height: 28 },
-    topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
+        topBar: {
+            height: 48,
+            justifyContent: "center",
+            alignItems: "center",
+            marginBottom: 8,
+        },
+        topLeft: { position: "absolute", left: 0, padding: 4 },
+        topRight: { position: "absolute", right: 0, width: 28, height: 28 },
+        topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
 
-    subtitle: { fontSize: 12, color: COLORS.subtle, marginBottom: 14 },
+        subtitle: { fontSize: 12, color: COLORS.subtle, marginBottom: 14 },
 
-    identityCard: {
-        borderRadius: 16,
-        paddingHorizontal: 16,
-        paddingVertical: 14,
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        backgroundColor: COLORS.card,
-        marginBottom: 16,
-    },
-    identityName: { fontSize: 16, fontWeight: "600", marginBottom: 4, color: COLORS.text },
-    identityLabel: { fontSize: 12, color: COLORS.muted },
-    identityDid: { fontSize: 12, color: COLORS.text, marginTop: 4, marginBottom: 10 },
-    identityStatsRow: { flexDirection: "row", justifyContent: "space-between" },
-    identityStat: { fontSize: 12, color: COLORS.muted },
+        identityCard: {
+            borderRadius: 16,
+            paddingHorizontal: 16,
+            paddingVertical: 14,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+            marginBottom: 16,
+        },
+        identityName: { fontSize: 16, fontWeight: "600", marginBottom: 4, color: COLORS.text },
+        identityLabel: { fontSize: 12, color: COLORS.muted },
+        identityDid: { fontSize: 12, color: COLORS.text, marginTop: 4, marginBottom: 10 },
+        identityStatsRow: { flexDirection: "row", justifyContent: "space-between" },
+        identityStat: { fontSize: 12, color: COLORS.muted },
 
-    sectionTitle: { fontSize: 14, fontWeight: "600", color: COLORS.text, marginBottom: 10 },
+        sectionTitle: { fontSize: 14, fontWeight: "600", color: COLORS.text, marginBottom: 10 },
 
-    radioRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 },
-    radioText: { fontSize: 13, color: COLORS.text },
+        radioRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 },
+        radioText: { fontSize: 13, color: COLORS.text },
 
-    inputWrap: {
-        backgroundColor: COLORS.inputBg,
-        borderRadius: 12,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        borderWidth: 1,
-        borderColor: COLORS.border,
-    },
-    inputLabel: { fontSize: 11, color: COLORS.subtle, marginBottom: 6 },
-    inputRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-    input: { flex: 1, fontSize: 13, color: COLORS.text, paddingVertical: 2 },
+        inputWrap: {
+            backgroundColor: COLORS.inputBg,
+            borderRadius: 12,
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+        },
+        inputLabel: { fontSize: 11, color: COLORS.subtle, marginBottom: 6 },
+        inputRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+        input: { flex: 1, fontSize: 13, color: COLORS.text, paddingVertical: 2 },
 
-    errorText: { marginTop: 8, fontSize: 12, color: "#F87171" },
+        errorText: { marginTop: 8, fontSize: 12, color: "#F87171" },
 
-    primaryButton: {
-        marginTop: 18,
-        backgroundColor: COLORS.accentBg,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-    },
-    primaryButtonText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
+        primaryButton: {
+            marginTop: 18,
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 14,
+            paddingVertical: 12,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+        },
+        primaryButtonText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
 
-    footerNote: { marginTop: 10, fontSize: 11, color: COLORS.subtle, textAlign: "center" },
+        footerNote: { marginTop: 10, fontSize: 11, color: COLORS.subtle, textAlign: "center" },
 
-    sheetOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
-    sheet: {
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 2,
-        backgroundColor: COLORS.bg,
-        borderTopLeftRadius: 22,
-        borderTopRightRadius: 22,
-        paddingHorizontal: 16,
-        paddingTop: 10,
-        paddingBottom: 18,
-        borderWidth: 1,
-        borderColor: COLORS.border,
-    },
-    sheetHandle: {
-        alignSelf: "center",
-        width: 56,
-        height: 5,
-        borderRadius: 999,
-        backgroundColor: "rgba(255,255,255,0.35)",
-        marginBottom: 12,
-    },
-    sheetTitle: { fontSize: 18, fontWeight: "700", color: COLORS.text },
-    sheetSub: { marginTop: 4, fontSize: 12, color: COLORS.muted },
+        sheetOverlay: { ...StyleSheet.absoluteFillObject },
+        sheet: {
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            zIndex: 2,
+            backgroundColor: COLORS.bg,
+            borderTopLeftRadius: 22,
+            borderTopRightRadius: 22,
+            paddingHorizontal: 16,
+            paddingTop: 10,
+            paddingBottom: 18,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+        },
+        sheetHandle: {
+            alignSelf: "center",
+            width: 56,
+            height: 5,
+            borderRadius: 999,
+            marginBottom: 12,
+        },
+        sheetTitle: { fontSize: 18, fontWeight: "700", color: COLORS.text },
+        sheetSub: { marginTop: 4, fontSize: 12, color: COLORS.muted },
 
-    sheetBtn: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 8,
-        backgroundColor: COLORS.accentBg,
-        borderRadius: 999,
-        paddingVertical: 12,
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-    },
-    sheetBtnText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
-});
+        sheetBtn: {
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 999,
+            paddingVertical: 12,
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+        },
+        sheetBtnText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
+    });

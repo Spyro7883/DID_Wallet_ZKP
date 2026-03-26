@@ -2,6 +2,7 @@ import React from "react";
 import { NavigationContainer } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { AppThemeProvider } from "./src/theme/AppThemeProvider";
 
 import Welcome from "./screens/welcome";
 import CreateIdentity from "./screens/createIdentity";
@@ -13,7 +14,6 @@ import type { RootStackParamList } from "./src/navigation/types";
 import { loadLastWallet } from "./src/storage/walletSession";
 import CreateDid from "./screens/createDid";
 import CreateVC from "./screens/createVC";
-import CreateVP from "./screens/createVP";
 
 import ProofRequestScreen from "./screens/proofRequestScreen";
 import ProofHistoryScreen from "./screens/proofHistory";
@@ -42,25 +42,26 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer>
-        <Stack.Navigator initialRouteName={initialRoute} screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="Welcome" component={Welcome} />
-          <Stack.Screen name="CreateIdentity" component={CreateIdentity} />
-          <Stack.Screen
-            name="Wallet"
-            component={WalletScreen}
-            initialParams={initialWalletParams}
-          />
-          <Stack.Screen name="WalletItems" component={WalletItems} />
-          <Stack.Screen name="Backup" component={BackupScreen} />
-          <Stack.Screen name="ImportBackup" component={ImportBackupScreen} />
-          <Stack.Screen name="CreateDid" component={CreateDid} />
-          <Stack.Screen name="CreateCredential" component={CreateVC} />
-          <Stack.Screen name="CreatePresentation" component={CreateVP} />
-          <Stack.Screen name="ProofRequest" component={ProofRequestScreen} />
-          <Stack.Screen name="ProofHistory" component={ProofHistoryScreen} />
-        </Stack.Navigator>
-      </NavigationContainer>
+      <AppThemeProvider>
+        <NavigationContainer>
+          <Stack.Navigator initialRouteName={initialRoute} screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="Welcome" component={Welcome} />
+            <Stack.Screen name="CreateIdentity" component={CreateIdentity} />
+            <Stack.Screen
+              name="Wallet"
+              component={WalletScreen}
+              initialParams={initialWalletParams}
+            />
+            <Stack.Screen name="WalletItems" component={WalletItems} />
+            <Stack.Screen name="Backup" component={BackupScreen} />
+            <Stack.Screen name="ImportBackup" component={ImportBackupScreen} />
+            <Stack.Screen name="CreateDid" component={CreateDid} />
+            <Stack.Screen name="CreateCredential" component={CreateVC} />
+            <Stack.Screen name="ProofRequest" component={ProofRequestScreen} />
+            <Stack.Screen name="ProofHistory" component={ProofHistoryScreen} />
+          </Stack.Navigator>
+        </NavigationContainer>
+      </AppThemeProvider>
     </SafeAreaProvider>
   );
 }

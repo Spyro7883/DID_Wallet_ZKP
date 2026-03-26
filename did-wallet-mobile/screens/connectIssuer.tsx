@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
     Modal,
     View,
@@ -11,8 +11,9 @@ import {
     Alert,
     Platform,
 } from "react-native";
-import { COLORS } from "../src/theme/colors";
 import { loadLastWallet, saveHolderSession } from "../src/storage/walletSession";
+import { type AppColors } from "../src/theme/colors";
+import { useAppTheme } from "../src/theme/AppThemeProvider";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
@@ -54,9 +55,21 @@ export default function ConnectIssuerSheet({
     onClose: () => void;
     onPaired?: () => void;
 }) {
+    const { colors, resolvedMode } = useAppTheme();
+    const COLORS = colors;
+    const styles = useMemo(() => createStyles(COLORS), [COLORS]);
+
     const translateY = useRef(new Animated.Value(420)).current;
     const [mounted, setMounted] = useState(visible);
     const [loading, setLoading] = useState(false);
+
+    const theme = useMemo(() => {
+        const isDark = resolvedMode === "dark";
+        return {
+            overlay: isDark ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.35)",
+            handle: isDark ? "rgba(255,255,255,0.35)" : "rgba(17,24,39,0.25)",
+        };
+    }, [resolvedMode]);
 
     useEffect(() => {
         if (visible) {
@@ -97,15 +110,24 @@ export default function ConnectIssuerSheet({
             const sumResp = await fetch(`${BASE_URL}/wallets/summary`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ profile: sess.profileName, passphrase: sess.passphrase, limit: 1 }),
+                body: JSON.stringify({
+                    profile: sess.profileName,
+                    passphrase: sess.passphrase,
+                    limit: 1,
+                }),
             });
             const sumJson = await sumResp.json();
-            if (!sumResp.ok || !sumJson.ok || !sumJson.activeDid) throw new Error("Could not read active DID");
+            if (!sumResp.ok || !sumJson.ok || !sumJson.activeDid) {
+                throw new Error("Could not read active DID");
+            }
+
             const holderDid = String(sumJson.activeDid);
 
             const chResp = await fetch(`${BASE_URL}/connect/challenge`);
             const chJson = await chResp.json();
-            if (!chResp.ok || !chJson?.id || !chJson?.challenge) throw new Error("challenge_failed");
+            if (!chResp.ok || !chJson?.id || !chJson?.challenge) {
+                throw new Error("challenge_failed");
+            }
 
             const payload = { id: chJson.id, challenge: chJson.challenge, ts: Date.now() };
             const { sig, alg } = await signPayload(holderDid, payload);
@@ -116,7 +138,9 @@ export default function ConnectIssuerSheet({
                 body: JSON.stringify({ id: chJson.id, holderDid, payload, sig, alg }),
             });
             const cfJson = await cfResp.json();
-            if (!cfResp.ok || !cfJson.ok || !cfJson.token) throw new Error(cfJson.error || "pair_failed");
+            if (!cfResp.ok || !cfJson.ok || !cfJson.token) {
+                throw new Error(cfJson.error || "pair_failed");
+            }
 
             await saveHolderSession(sess.profileName, {
                 holderToken: String(cfJson.token),
@@ -137,10 +161,13 @@ export default function ConnectIssuerSheet({
 
     return (
         <Modal transparent visible={mounted} animationType="none" onRequestClose={onClose}>
-            <Pressable style={styles.overlay} onPress={!loading ? onClose : undefined} />
+            <Pressable
+                style={[styles.overlay, { backgroundColor: theme.overlay }]}
+                onPress={!loading ? onClose : undefined}
+            />
 
             <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
-                <View style={styles.handle} />
+                <View style={[styles.handle, { backgroundColor: theme.handle }]} />
 
                 <Text style={styles.title}>Connect issuer</Text>
                 <Text style={styles.sub}>
@@ -162,7 +189,11 @@ export default function ConnectIssuerSheet({
                     )}
                 </Pressable>
 
-                <Pressable style={[styles.secondaryBtn, loading && { opacity: 0.6 }]} onPress={onClose} disabled={loading}>
+                <Pressable
+                    style={[styles.secondaryBtn, loading && { opacity: 0.6 }]}
+                    onPress={onClose}
+                    disabled={loading}
+                >
                     <Text style={styles.secondaryText}>Cancel</Text>
                 </Pressable>
             </Animated.View>
@@ -170,54 +201,72 @@ export default function ConnectIssuerSheet({
     );
 }
 
-const styles = StyleSheet.create({
-    overlay: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
+const createStyles = (COLORS: AppColors) =>
+    StyleSheet.create({
+        overlay: {
+            ...StyleSheet.absoluteFillObject,
+        },
 
-    sheet: {
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: COLORS.bg,
-        borderTopLeftRadius: 22,
-        borderTopRightRadius: 22,
-        paddingTop: 10,
-        paddingHorizontal: 16,
-        paddingBottom: 18,
-        borderWidth: 1,
-        borderColor: COLORS.border,
-    },
-    handle: {
-        alignSelf: "center",
-        width: 56,
-        height: 5,
-        borderRadius: 999,
-        backgroundColor: "rgba(255,255,255,0.35)",
-        marginBottom: 12,
-    },
+        sheet: {
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: COLORS.bg,
+            borderTopLeftRadius: 22,
+            borderTopRightRadius: 22,
+            paddingTop: 10,
+            paddingHorizontal: 16,
+            paddingBottom: 18,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+        },
+        handle: {
+            alignSelf: "center",
+            width: 56,
+            height: 5,
+            borderRadius: 999,
+            marginBottom: 12,
+        },
 
-    title: { fontSize: 18, fontWeight: "600", color: COLORS.text, marginBottom: 6 },
-    sub: { fontSize: 12, color: COLORS.muted, lineHeight: 16 },
+        title: {
+            fontSize: 18,
+            fontWeight: "600",
+            color: COLORS.text,
+            marginBottom: 6,
+        },
+        sub: {
+            fontSize: 12,
+            color: COLORS.muted,
+            lineHeight: 16,
+        },
 
-    primaryBtn: {
-        marginTop: 14,
-        backgroundColor: COLORS.accentBg,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-    },
-    primaryText: { color: COLORS.accentText, fontWeight: "600", fontSize: 14 },
+        primaryBtn: {
+            marginTop: 14,
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 14,
+            paddingVertical: 12,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+        },
+        primaryText: {
+            color: COLORS.accentText,
+            fontWeight: "600",
+            fontSize: 14,
+        },
 
-    secondaryBtn: {
-        marginTop: 10,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        backgroundColor: COLORS.card,
-    },
-    secondaryText: { color: COLORS.text, fontWeight: "600" },
-});
+        secondaryBtn: {
+            marginTop: 10,
+            borderRadius: 14,
+            paddingVertical: 12,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+        },
+        secondaryText: {
+            color: COLORS.text,
+            fontWeight: "600",
+        },
+    });

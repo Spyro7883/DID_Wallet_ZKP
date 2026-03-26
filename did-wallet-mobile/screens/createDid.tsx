@@ -1,6 +1,5 @@
 import React, { useMemo, useState } from "react";
 import {
-    SafeAreaView,
     View,
     Text,
     TextInput,
@@ -9,15 +8,26 @@ import {
     ActivityIndicator,
     Alert,
     Platform,
+    StatusBar,
+    ScrollView,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { MaterialIcons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
+
 import { loadLastWallet } from "../src/storage/walletSession";
+import { type AppColors } from "../src/theme/colors";
+import { useAppTheme } from "../src/theme/AppThemeProvider";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
 type DidMethod = "key" | "ethr";
 
 export default function CreateDidScreen() {
+    const { colors } = useAppTheme();
+    const COLORS = colors;
+    const styles = useMemo(() => createStyles(COLORS), [COLORS]);
+
     const navigation = useNavigation<any>();
 
     const [method, setMethod] = useState<DidMethod>("key");
@@ -48,10 +58,14 @@ export default function CreateDidScreen() {
             });
 
             const json = await resp.json();
-            if (!resp.ok || !json.ok) throw new Error(json.error || "create_did_failed");
+            if (!resp.ok || !json.ok) {
+                throw new Error(json.error || "create_did_failed");
+            }
 
             const did = json.did as string | undefined;
-            if (did) Alert.alert("DID created", did);
+            if (did) {
+                Alert.alert("DID created", did);
+            }
 
             navigation.goBack();
         } catch (e: any) {
@@ -61,107 +75,218 @@ export default function CreateDidScreen() {
         }
     };
 
+    const TOP_PAD = Platform.OS === "android" ? (StatusBar.currentHeight ?? 0) + 12 : 12;
+
     return (
-        <SafeAreaView style={styles.container}>
-            <Text style={styles.title}>Create DID</Text>
+        <SafeAreaView
+            style={[styles.container, { paddingTop: TOP_PAD }]}
+            edges={["top", "left", "right"]}
+        >
+            <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+                <View style={styles.topBar}>
+                    <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={styles.topLeft}>
+                        <MaterialIcons name="arrow-back" size={24} color={COLORS.text} />
+                    </Pressable>
 
-            <Text style={styles.label}>Method</Text>
-            <View style={styles.chipsRow}>
+                    <Text style={styles.topTitle}>Create DID</Text>
+
+                    <View style={styles.topRight} />
+                </View>
+
+                <Text style={styles.subtitle}>
+                    Create a new decentralized identifier for this wallet
+                </Text>
+
+                <View style={styles.card}>
+                    <Text style={styles.sectionTitle}>Method</Text>
+
+                    <View style={styles.chipsRow}>
+                        <Pressable
+                            onPress={() => setMethod("key")}
+                            style={[styles.chip, method === "key" && styles.chipActive]}
+                        >
+                            <Text style={[styles.chipText, method === "key" && styles.chipTextActive]}>
+                                did:key
+                            </Text>
+                        </Pressable>
+
+                        <Pressable
+                            onPress={() => setMethod("ethr")}
+                            style={[styles.chip, method === "ethr" && styles.chipActive]}
+                        >
+                            <Text style={[styles.chipText, method === "ethr" && styles.chipTextActive]}>
+                                did:ethr
+                            </Text>
+                        </Pressable>
+                    </View>
+
+                    <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Alias</Text>
+                    <Text style={styles.fieldHint}>Optional label for easier recognition</Text>
+
+                    <TextInput
+                        value={alias}
+                        onChangeText={setAlias}
+                        placeholder="e.g. Main identity"
+                        placeholderTextColor={COLORS.subtle}
+                        style={styles.input}
+                        {...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {})}
+                    />
+                </View>
+
                 <Pressable
-                    onPress={() => setMethod("key")}
-                    style={[styles.chip, method === "key" && styles.chipActive]}
+                    disabled={!canCreate}
+                    onPress={createDid}
+                    style={[styles.primaryBtn, !canCreate && { opacity: 0.6 }]}
                 >
-                    <Text style={[styles.chipText, method === "key" && styles.chipTextActive]}>
-                        did:key
-                    </Text>
+                    {loading ? (
+                        <View style={styles.btnRow}>
+                            <ActivityIndicator />
+                            <Text style={styles.primaryText}>Creating…</Text>
+                        </View>
+                    ) : (
+                        <Text style={styles.primaryText}>Create DID</Text>
+                    )}
                 </Pressable>
 
-                <Pressable
-                    onPress={() => setMethod("ethr")}
-                    style={[styles.chip, method === "ethr" && styles.chipActive]}
-                >
-                    <Text style={[styles.chipText, method === "ethr" && styles.chipTextActive]}>
-                        did:ethr
-                    </Text>
+                <Pressable onPress={() => navigation.goBack()} style={styles.secondaryBtn}>
+                    <Text style={styles.secondaryText}>Cancel</Text>
                 </Pressable>
-            </View>
-
-            <Text style={styles.label}>Alias (optional)</Text>
-            <TextInput
-                value={alias}
-                onChangeText={setAlias}
-                placeholder="e.g. Main identity"
-                placeholderTextColor="#6B7280"
-                style={styles.input}
-            />
-
-            <View style={{ height: 16 }} />
-
-            <Pressable
-                disabled={!canCreate}
-                onPress={createDid}
-                style={[styles.primaryBtn, !canCreate && { opacity: 0.6 }]}
-            >
-                {loading ? <ActivityIndicator /> : <Text style={styles.primaryText}>Create DID</Text>}
-            </Pressable>
-
-            <Pressable onPress={() => navigation.goBack()} style={styles.secondaryBtn}>
-                <Text style={styles.secondaryText}>Back</Text>
-            </Pressable>
+            </ScrollView>
         </SafeAreaView>
     );
 }
 
-const BORDER = "#E5E7EB";
-const ACCENT_BG = "#F3E8FF";
+const createStyles = (COLORS: AppColors) =>
+    StyleSheet.create({
+        container: {
+            flex: 1,
+            backgroundColor: COLORS.bg,
+        },
+        content: {
+            paddingHorizontal: 16,
+            paddingBottom: 24,
+        },
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: "#0B0F14", padding: 24 },
-    title: { fontSize: 20, fontWeight: "700", color: "white", marginBottom: 18 },
+        topBar: {
+            height: 48,
+            justifyContent: "center",
+            alignItems: "center",
+            marginBottom: 8,
+        },
+        topLeft: {
+            position: "absolute",
+            left: 0,
+            padding: 4,
+        },
+        topRight: {
+            position: "absolute",
+            right: 0,
+            width: 28,
+            height: 28,
+        },
+        topTitle: {
+            color: COLORS.text,
+            fontSize: 18,
+            fontWeight: "600",
+        },
 
-    label: { fontSize: 12, color: "#C7CDD6", marginBottom: 6 },
+        subtitle: {
+            fontSize: 12,
+            color: COLORS.subtle,
+            marginBottom: 14,
+        },
 
-    chipsRow: { flexDirection: "row", gap: 10, marginBottom: 12 },
-    chip: {
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: BORDER,
-        backgroundColor: "rgba(255,255,255,0.06)",
-    },
-    chipActive: { backgroundColor: ACCENT_BG, borderColor: "#D8B4FE" },
-    chipText: { color: "#E5E7EB", fontWeight: "600" },
-    chipTextActive: { color: "#111827" },
+        card: {
+            borderRadius: 16,
+            paddingHorizontal: 16,
+            paddingVertical: 14,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+            marginBottom: 18,
+        },
 
-    input: {
-        borderWidth: 1,
-        borderColor: BORDER,
-        borderRadius: 12,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        color: "white",
-        backgroundColor: "rgba(255,255,255,0.06)",
-    },
+        sectionTitle: {
+            fontSize: 13,
+            fontWeight: "600",
+            color: COLORS.text,
+            marginBottom: 8,
+        },
+        fieldHint: {
+            fontSize: 11,
+            color: COLORS.subtle,
+            marginBottom: 8,
+        },
 
-    primaryBtn: {
-        backgroundColor: ACCENT_BG,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: "#D8B4FE",
-    },
-    primaryText: { fontSize: 14, fontWeight: "700", color: "#111827" },
+        chipsRow: {
+            flexDirection: "row",
+            gap: 10,
+            flexWrap: "wrap",
+        },
+        chip: {
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: COLORS.borderSoft,
+            backgroundColor: COLORS.card,
+        },
+        chipActive: {
+            backgroundColor: COLORS.accentBg,
+            borderColor: COLORS.accentBorder,
+        },
+        chipText: {
+            color: COLORS.text,
+            fontWeight: "600",
+            fontSize: 13,
+        },
+        chipTextActive: {
+            color: COLORS.accentText,
+        },
 
-    secondaryBtn: {
-        marginTop: 10,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.2)",
-        backgroundColor: "rgba(255,255,255,0.04)",
-    },
-    secondaryText: { color: "white", fontWeight: "600" },
-});
+        input: {
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            borderRadius: 12,
+            paddingHorizontal: 12,
+            paddingVertical: 11,
+            color: COLORS.text,
+            backgroundColor: COLORS.inputBg,
+            fontSize: 14,
+        },
+
+        primaryBtn: {
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 14,
+            paddingVertical: 12,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+        },
+        primaryText: {
+            fontSize: 14,
+            fontWeight: "600",
+            color: COLORS.accentText,
+        },
+
+        secondaryBtn: {
+            marginTop: 10,
+            borderRadius: 14,
+            paddingVertical: 12,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+        },
+        secondaryText: {
+            color: COLORS.text,
+            fontWeight: "600",
+            fontSize: 14,
+        },
+
+        btnRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+        },
+    });

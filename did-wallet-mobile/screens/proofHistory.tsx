@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
     View,
     Text,
@@ -13,7 +13,8 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { MaterialIcons } from "@expo/vector-icons";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 
-import { COLORS } from "../src/theme/colors";
+import { type AppColors } from "../src/theme/colors";
+import { useAppTheme } from "../src/theme/AppThemeProvider";
 import {
     clearProofHistory,
     listProofHistory,
@@ -38,6 +39,10 @@ function isExpired(expiresAt?: string | null) {
 }
 
 export default function ProofHistoryScreen() {
+    const { colors } = useAppTheme();
+    const COLORS = colors;
+    const styles = useMemo(() => createStyles(COLORS), [COLORS]);
+
     const navigation = useNavigation<any>();
     const insets = useSafeAreaInsets();
 
@@ -85,21 +90,17 @@ export default function ProofHistoryScreen() {
             return;
         }
 
-        Alert.alert(
-            "Clear history",
-            "Delete all saved proof/access history?",
-            [
-                { text: "Cancel", style: "cancel" },
-                {
-                    text: "Delete",
-                    style: "destructive",
-                    onPress: async () => {
-                        await clearProofHistory();
-                        await refresh();
-                    },
+        Alert.alert("Clear history", "Delete all saved proof/access history?", [
+            { text: "Cancel", style: "cancel" },
+            {
+                text: "Delete",
+                style: "destructive",
+                onPress: async () => {
+                    await clearProofHistory();
+                    await refresh();
                 },
-            ],
-        );
+            },
+        ]);
     }, [refresh]);
 
     const onDeleteOne = useCallback(
@@ -115,21 +116,17 @@ export default function ProofHistoryScreen() {
                 return;
             }
 
-            Alert.alert(
-                "Delete entry",
-                "Remove this history entry?",
-                [
-                    { text: "Cancel", style: "cancel" },
-                    {
-                        text: "Delete",
-                        style: "destructive",
-                        onPress: async () => {
-                            await removeProofHistoryItem(localId);
-                            await refresh();
-                        },
+            Alert.alert("Delete entry", "Remove this history entry?", [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Delete",
+                    style: "destructive",
+                    onPress: async () => {
+                        await removeProofHistoryItem(localId);
+                        await refresh();
                     },
-                ],
-            );
+                },
+            ]);
         },
         [refresh],
     );
@@ -151,11 +148,7 @@ export default function ProofHistoryScreen() {
 
                     <Text style={styles.topTitle}>Proof history</Text>
 
-                    <Pressable
-                        onPress={onClearAll}
-                        hitSlop={10}
-                        style={styles.topRightBtn}
-                    >
+                    <Pressable onPress={onClearAll} hitSlop={10} style={styles.topRightBtn}>
                         <MaterialIcons name="delete-outline" size={22} color={COLORS.text} />
                     </Pressable>
                 </View>
@@ -239,54 +232,57 @@ export default function ProofHistoryScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: COLORS.bg,
-        paddingHorizontal: 16,
-        paddingBottom: 16,
-    },
-    topBar: {
-        height: 48,
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 12,
-    },
-    topLeft: { position: "absolute", left: 0, padding: 4 },
-    topRightBtn: { position: "absolute", right: 0, padding: 4 },
-    topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
+const createStyles = (COLORS: AppColors) =>
+    StyleSheet.create({
+        container: {
+            flex: 1,
+            backgroundColor: COLORS.bg,
+            paddingHorizontal: 16,
+            paddingBottom: 16,
+        },
+        topBar: {
+            height: 48,
+            justifyContent: "center",
+            alignItems: "center",
+            marginBottom: 12,
+        },
+        topLeft: { position: "absolute", left: 0, padding: 4 },
+        topRightBtn: { position: "absolute", right: 0, padding: 4 },
+        topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
 
-    card: {
-        marginTop: 12,
-        borderRadius: 14,
-        padding: 12,
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        backgroundColor: COLORS.card,
-    },
-    rowBetween: {
-        flexDirection: "row",
-        alignItems: "center",
-        justifyContent: "space-between",
-    },
-    cardTitle: { color: COLORS.text, fontWeight: "600", fontSize: 14 },
-    cardSub: { color: COLORS.muted, marginTop: 4, fontSize: 12 },
-    section: { marginTop: 12 },
-    sectionTitle: { color: COLORS.text, fontWeight: "600", fontSize: 13 },
-    primaryBtn: {
-        backgroundColor: COLORS.accentBg,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-        marginTop: 10,
-    },
-    primaryText: {
-        fontSize: 14,
-        fontWeight: "600",
-        color: COLORS.accentText,
-    },
-    err: { color: "#F87171", marginTop: 8, fontSize: 12 },
-    warnText: { color: "#F59E0B" },
-});
+        card: {
+            marginTop: 12,
+            borderRadius: 14,
+            padding: 12,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+        },
+        rowBetween: {
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+        },
+        cardTitle: { color: COLORS.text, fontWeight: "600", fontSize: 14 },
+        cardSub: { color: COLORS.muted, marginTop: 4, fontSize: 12 },
+        section: { marginTop: 12 },
+        sectionTitle: { color: COLORS.text, fontWeight: "600", fontSize: 13 },
+
+        primaryBtn: {
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 14,
+            paddingVertical: 12,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+            marginTop: 10,
+        },
+        primaryText: {
+            fontSize: 14,
+            fontWeight: "600",
+            color: COLORS.accentText,
+        },
+
+        err: { color: "#F87171", marginTop: 8, fontSize: 12 },
+        warnText: { color: "#F59E0B" },
+    });

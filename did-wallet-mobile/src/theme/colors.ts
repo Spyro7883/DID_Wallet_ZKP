@@ -1,18 +1,44 @@
-export const COLORS = {
-  bg: "#0B0F14",
+export type AppColors = {
+  bg: string;
+  card: string;
+  text: string;
+  muted: string;
+  subtle: string;
+  border: string;
+  borderSoft: string;
+  inputBg: string;
+  accentBg: string;
+  accentBorder: string;
+  accentText: string;
+  link: string;
+};
 
-  card: "rgba(255,255,255,0.04)",
-  inputBg: "rgba(255,255,255,0.06)",
-  border: "rgba(229,231,235,0.15)",
-  borderSoft: "rgba(229,231,235,0.2)",
+export const LIGHT_COLORS: AppColors = {
+  bg: "#F8FAFC",
+  card: "#FFFFFF",
+  text: "#0F172A",
+  muted: "#475569",
+  subtle: "#64748B",
+  border: "#E2E8F0",
+  borderSoft: "#CBD5E1",
+  inputBg: "#FFFFFF",
+  accentBg: "#EEF2FF",
+  accentBorder: "#C7D2FE",
+  accentText: "#4338CA",
+  link: "#4F46E5",
+};
 
-  text: "#FFFFFF",
-  muted: "#C7CDD6",
-  subtle: "#9CA3AF",
-
-  accentBg: "#F3E8FF",
-  accentBorder: "#D8B4FE",
-  accentText: "#111827",
-
-  link: "#D8B4FE",
+export const DARK_COLORS: AppColors = {
+  bg: "#0B1020",
+  card: "#121A2B",
+  text: "#F8FAFC",
+  muted: "#CBD5E1",
+  subtle: "#94A3B8",
+  border: "#243041",
+  borderSoft: "#334155",
+  inputBg: "#0F172A",
+  accentBg: "rgba(99,102,241,0.22)",
+  accentBorder: "#6366F1",
+  accentText: "#C7D2FE",
+  link: "#93C5FD",
 };

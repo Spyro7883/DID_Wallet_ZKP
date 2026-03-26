@@ -16,15 +16,17 @@ import {
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { MaterialIcons } from "@expo/vector-icons";
 import { SafeAreaView } from "react-native-safe-area-context";
+
 import { poseidon2 } from "../src/zk/poseidon";
 import { randomSalt31 } from "../src/zk/random";
 import { saveSecretByCommit } from "../src/zk/secrets";
-
 import {
     loadLastWallet,
     saveLastVcRequest,
     loadLastVcRequest,
 } from "../src/storage/walletSession";
+import { type AppColors } from "../src/theme/colors";
+import { useAppTheme } from "../src/theme/AppThemeProvider";
 
 const BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL;
 
@@ -68,8 +70,6 @@ function short(s: string, head = 10, tail = 6) {
     if (v.length <= head + tail + 3) return v;
     return `${v.slice(0, head)}...${v.slice(-tail)}`;
 }
-
-let _poseidon: any | null = null;
 
 function calcAgeYears(dobIso: string): number {
     const [y, m, d] = String(dobIso || "").split("-").map(Number);
@@ -171,6 +171,10 @@ async function buildIncomeClaims(incomeText: string, currency: string) {
 }
 
 export default function CreateCredentialScreen() {
+    const { colors, resolvedMode } = useAppTheme();
+    const COLORS = colors;
+    const styles = useMemo(() => createStyles(COLORS), [COLORS]);
+
     const navigation = useNavigation<any>();
 
     const [subjectDid, setSubjectDid] = useState("");
@@ -196,6 +200,9 @@ export default function CreateCredentialScreen() {
     const syncingRef = useRef(false);
     const importedReqIdsRef = useRef<Set<number>>(new Set());
     const pinnedReqIdRef = useRef<number | null>(null);
+
+    const isDark = resolvedMode === "dark";
+    const modalOverlay = isDark ? "rgba(0,0,0,0.55)" : "rgba(0,0,0,0.35)";
 
     const selectedReq = useMemo(
         () => (requestId ? requests.find((x) => x.id === requestId) ?? null : null),
@@ -484,7 +491,7 @@ export default function CreateCredentialScreen() {
             >
                 <View style={styles.topBar}>
                     <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={styles.topLeft}>
-                        <MaterialIcons name="arrow-back" size={24} color="white" />
+                        <MaterialIcons name="arrow-back" size={24} color={COLORS.text} />
                     </Pressable>
 
                     <Text style={styles.titleText}>Request VC</Text>
@@ -494,22 +501,26 @@ export default function CreateCredentialScreen() {
                     </Pressable>
                 </View>
 
+                <Text style={styles.pageSub}>
+                    Submit a credential request and track approval status
+                </Text>
+
                 <Modal
                     visible={reqModalOpen}
                     transparent
                     animationType="fade"
                     onRequestClose={() => setReqModalOpen(false)}
                 >
-                    <Pressable style={styles.backdrop} onPress={() => setReqModalOpen(false)} />
+                    <Pressable style={[styles.backdrop, { backgroundColor: modalOverlay }]} onPress={() => setReqModalOpen(false)} />
                     <View style={styles.modalCard}>
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>Requests</Text>
                             <Pressable onPress={() => setReqModalOpen(false)}>
-                                <MaterialIcons name="close" size={22} color="#C7CDD6" />
+                                <MaterialIcons name="close" size={22} color={COLORS.subtle} />
                             </Pressable>
                         </View>
 
-                        <View style={{ flexDirection: "row", gap: 8, marginTop: 10, alignItems: "center" }}>
+                        <View style={styles.modalActionsRow}>
                             <Pressable
                                 onPress={() => setReqFilter("pending")}
                                 style={[styles.chip, reqFilter === "pending" && styles.chipActive]}
@@ -568,7 +579,7 @@ export default function CreateCredentialScreen() {
                                     </Text>
                                 </Pressable>
                             )}
-                            ListEmptyComponent={<Text style={{ color: "#9CA3AF", marginTop: 10 }}>No requests</Text>}
+                            ListEmptyComponent={<Text style={styles.emptyText}>No requests</Text>}
                         />
                     </View>
                 </Modal>
@@ -579,12 +590,12 @@ export default function CreateCredentialScreen() {
                     animationType="fade"
                     onRequestClose={() => setVcModalOpen(false)}
                 >
-                    <Pressable style={styles.backdrop} onPress={() => setVcModalOpen(false)} />
+                    <Pressable style={[styles.backdrop, { backgroundColor: modalOverlay }]} onPress={() => setVcModalOpen(false)} />
                     <View style={styles.vcModalCard}>
                         <View style={styles.modalHeader}>
                             <Text style={styles.modalTitle}>Issued VC</Text>
                             <Pressable onPress={() => setVcModalOpen(false)}>
-                                <MaterialIcons name="close" size={22} color="#C7CDD6" />
+                                <MaterialIcons name="close" size={22} color={COLORS.subtle} />
                             </Pressable>
                         </View>
 
@@ -611,114 +622,136 @@ export default function CreateCredentialScreen() {
                     </View>
                 </Modal>
 
-                <Text style={styles.label}>Your DID (subject = holder)</Text>
-                <TextInput
-                    value={subjectDid}
-                    onChangeText={setSubjectDid}
-                    placeholder="did:..."
-                    placeholderTextColor="#6B7280"
-                    style={styles.input}
-                    autoCapitalize="none"
-                    editable={false}
-                />
+                <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Subject</Text>
+                    <Text style={styles.cardSub}>The request is linked to your active DID.</Text>
 
-                <Text style={styles.label}>Credential type</Text>
-                <View style={{ flexDirection: "row", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-                    {TYPES.map((t) => (
-                        <Pressable
-                            key={t.value}
-                            onPress={() => setType(t.value)}
-                            style={[styles.typePill, type === t.value && styles.typePillActive]}
-                        >
-                            <Text style={[styles.typeText, type === t.value && styles.typeTextActive]}>
-                                {t.label}
-                            </Text>
-                        </Pressable>
-                    ))}
+                    <Text style={styles.label}>Your DID</Text>
+                    <TextInput
+                        value={subjectDid}
+                        onChangeText={setSubjectDid}
+                        placeholder="did:..."
+                        placeholderTextColor={COLORS.subtle}
+                        style={styles.input}
+                        autoCapitalize="none"
+                        editable={false}
+                    />
                 </View>
 
-                <Text style={styles.label}>Validity (days)</Text>
-                <TextInput
-                    value={validDays}
-                    onChangeText={setValidDays}
-                    placeholder="365"
-                    placeholderTextColor="#6B7280"
-                    style={styles.input}
-                    keyboardType="number-pad"
-                />
+                <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Credential type</Text>
+                    <Text style={styles.cardSub}>Choose the type of credential you want to request.</Text>
 
-                <Text style={styles.label}>Claims</Text>
+                    <View style={styles.typeRow}>
+                        {TYPES.map((t) => (
+                            <Pressable
+                                key={t.value}
+                                onPress={() => setType(t.value)}
+                                style={[styles.typePill, type === t.value && styles.typePillActive]}
+                            >
+                                <Text style={[styles.typeText, type === t.value && styles.typeTextActive]}>
+                                    {t.label}
+                                </Text>
+                            </Pressable>
+                        ))}
+                    </View>
 
-                {type === "CitizenshipCredential" && (
-                    <>
-                        <TextInput
-                            value={citizenship}
-                            onChangeText={setCitizenship}
-                            placeholder="RO"
-                            placeholderTextColor="#6B7280"
-                            style={styles.input}
-                            autoCapitalize="characters"
-                        />
-                        <Text style={styles.helperText}>
-                            On submit, the app computes a commitment and sends only the commitment.
-                        </Text>
-                    </>
-                )}
+                    <Text style={styles.label}>Validity (days)</Text>
+                    <TextInput
+                        value={validDays}
+                        onChangeText={setValidDays}
+                        placeholder="365"
+                        placeholderTextColor={COLORS.subtle}
+                        style={styles.input}
+                        keyboardType="number-pad"
+                    />
+                </View>
 
-                {type === "AgeCredential" && (
-                    <>
-                        <TextInput
-                            value={dob}
-                            onChangeText={setDob}
-                            placeholder="YYYY-MM-DD"
-                            placeholderTextColor="#6B7280"
-                            style={styles.input}
-                            autoCapitalize="none"
-                        />
-                        <Text style={styles.helperText}>
-                            DOB stays local. The app derives age and sends only the commitment.
-                        </Text>
-                    </>
-                )}
+                <View style={styles.card}>
+                    <Text style={styles.cardTitle}>Claims</Text>
+                    <Text style={styles.cardSub}>Raw values stay local. The request sends commitments.</Text>
 
-                {type === "IncomeCredential" && (
-                    <>
-                        <TextInput
-                            value={income}
-                            onChangeText={setIncome}
-                            placeholder="income"
-                            placeholderTextColor="#6B7280"
-                            style={styles.input}
-                            keyboardType="number-pad"
-                        />
-                        <View style={{ height: 8 }} />
-                        <TextInput
-                            value={currency}
-                            onChangeText={setCurrency}
-                            placeholder="RON"
-                            placeholderTextColor="#6B7280"
-                            style={styles.input}
-                            autoCapitalize="characters"
-                        />
-                        <Text style={styles.helperText}>
-                            The app sends only `incomeCommit` and optional currency.
-                        </Text>
-                    </>
-                )}
+                    {type === "CitizenshipCredential" ? (
+                        <>
+                            <Text style={styles.label}>Citizenship</Text>
+                            <TextInput
+                                value={citizenship}
+                                onChangeText={setCitizenship}
+                                placeholder="RO"
+                                placeholderTextColor={COLORS.subtle}
+                                style={styles.input}
+                                autoCapitalize="characters"
+                            />
+                            <Text style={styles.helperText}>
+                                On submit, the app computes a commitment and sends only the commitment.
+                            </Text>
+                        </>
+                    ) : null}
 
-                <View style={{ height: 14 }} />
+                    {type === "AgeCredential" ? (
+                        <>
+                            <Text style={styles.label}>Date of birth</Text>
+                            <TextInput
+                                value={dob}
+                                onChangeText={setDob}
+                                placeholder="YYYY-MM-DD"
+                                placeholderTextColor={COLORS.subtle}
+                                style={styles.input}
+                                autoCapitalize="none"
+                            />
+                            <Text style={styles.helperText}>
+                                DOB stays local. The app derives age and sends only the commitment.
+                            </Text>
+                        </>
+                    ) : null}
+
+                    {type === "IncomeCredential" ? (
+                        <>
+                            <Text style={styles.label}>Income</Text>
+                            <TextInput
+                                value={income}
+                                onChangeText={setIncome}
+                                placeholder="income"
+                                placeholderTextColor={COLORS.subtle}
+                                style={styles.input}
+                                keyboardType="number-pad"
+                            />
+
+                            <Text style={styles.label}>Currency</Text>
+                            <TextInput
+                                value={currency}
+                                onChangeText={setCurrency}
+                                placeholder="RON"
+                                placeholderTextColor={COLORS.subtle}
+                                style={styles.input}
+                                autoCapitalize="characters"
+                            />
+
+                            <Text style={styles.helperText}>
+                                The app sends only incomeCommit and optional currency.
+                            </Text>
+                        </>
+                    ) : null}
+                </View>
 
                 <Pressable
                     disabled={!canSubmit}
                     onPress={submitRequest}
                     style={[styles.primaryBtn, !canSubmit && { opacity: 0.6 }]}
                 >
-                    {loading ? <ActivityIndicator /> : <Text style={styles.primaryText}>Submit request</Text>}
+                    {loading ? (
+                        <View style={styles.btnRow}>
+                            <ActivityIndicator />
+                            <Text style={styles.primaryText}>Submitting…</Text>
+                        </View>
+                    ) : (
+                        <Text style={styles.primaryText}>Submit request</Text>
+                    )}
                 </Pressable>
 
                 {requestId && selectedReq ? (
                     <View style={styles.statusCard}>
-                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
+                        <View style={styles.statusHeader}>
                             <View style={{ flex: 1, paddingRight: 10 }}>
                                 <Text style={styles.statusTitle}>#{selectedReq.id} · {statusLabel}</Text>
                                 <Text style={styles.statusSub}>{selectedReq.vcType}</Text>
@@ -779,7 +812,7 @@ export default function CreateCredentialScreen() {
                         ) : null}
 
                         <Pressable onPress={() => setDetailsOpen((v) => !v)} style={{ marginTop: 12 }}>
-                            <Text style={{ color: "#D8B4FE", fontWeight: "600" }}>
+                            <Text style={styles.linkText}>
                                 {detailsOpen ? "Hide details" : "Show details"}
                             </Text>
                         </Pressable>
@@ -794,180 +827,288 @@ export default function CreateCredentialScreen() {
     );
 }
 
-const ACCENT_BG = "#F3E8FF";
+const createStyles = (COLORS: AppColors) =>
+    StyleSheet.create({
+        container: {
+            flex: 1,
+            backgroundColor: COLORS.bg,
+            paddingHorizontal: 16,
+            paddingBottom: 16,
+        },
 
-const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: "#0B0F14",
-        paddingHorizontal: 16,
-        paddingBottom: 16,
-    },
+        topBar: {
+            height: 48,
+            justifyContent: "center",
+            alignItems: "center",
+            marginBottom: 8,
+        },
+        topLeft: { position: "absolute", left: 0, padding: 4 },
+        topRight: { position: "absolute", right: 0 },
 
-    topBar: {
-        height: 48,
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 12,
-    },
-    topLeft: { position: "absolute", left: 0, padding: 4 },
-    topRight: { position: "absolute", right: 0 },
+        titleText: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
+        pageSub: {
+            fontSize: 12,
+            color: COLORS.subtle,
+            marginBottom: 14,
+        },
 
-    titleText: { color: "white", fontSize: 18, fontWeight: "600" },
+        card: {
+            borderRadius: 16,
+            paddingHorizontal: 16,
+            paddingVertical: 14,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+            marginBottom: 12,
+        },
+        cardTitle: {
+            color: COLORS.text,
+            fontWeight: "600",
+            fontSize: 14,
+        },
+        cardSub: {
+            color: COLORS.muted,
+            marginTop: 4,
+            fontSize: 12,
+            marginBottom: 10,
+        },
 
-    label: { fontSize: 12, color: "#C7CDD6", marginBottom: 6, marginTop: 10, letterSpacing: 0.2 },
+        label: {
+            fontSize: 12,
+            color: COLORS.muted,
+            marginBottom: 6,
+            marginTop: 10,
+            letterSpacing: 0.2,
+        },
 
-    input: {
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.15)",
-        borderRadius: 12,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        color: "white",
-        backgroundColor: "rgba(255,255,255,0.06)",
-        fontSize: 14,
-        ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
-    },
+        input: {
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            borderRadius: 12,
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            color: COLORS.text,
+            backgroundColor: COLORS.inputBg,
+            fontSize: 14,
+            ...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {}),
+        },
 
-    helperText: {
-        color: "#9CA3AF",
-        marginTop: 6,
-        fontSize: 11,
-        lineHeight: 16,
-    },
+        helperText: {
+            color: COLORS.subtle,
+            marginTop: 6,
+            fontSize: 11,
+            lineHeight: 16,
+        },
 
-    typePill: {
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.2)",
-        backgroundColor: "rgba(255,255,255,0.04)",
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        borderRadius: 999,
-    },
-    typePillActive: { backgroundColor: ACCENT_BG, borderColor: "#D8B4FE" },
-    typeText: { color: "white", fontWeight: "700", fontSize: 12 },
-    typeTextActive: { color: "#111827" },
+        typeRow: {
+            flexDirection: "row",
+            gap: 8,
+            marginTop: 6,
+            flexWrap: "wrap",
+        },
+        typePill: {
+            borderWidth: 1,
+            borderColor: COLORS.borderSoft,
+            backgroundColor: COLORS.card,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            borderRadius: 999,
+        },
+        typePillActive: {
+            backgroundColor: COLORS.accentBg,
+            borderColor: COLORS.accentBorder,
+        },
+        typeText: {
+            color: COLORS.text,
+            fontWeight: "700",
+            fontSize: 12,
+        },
+        typeTextActive: {
+            color: COLORS.accentText,
+        },
 
-    primaryBtn: {
-        backgroundColor: ACCENT_BG,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: "#D8B4FE",
-    },
-    primaryText: { fontSize: 14, fontWeight: "600", color: "#111827" },
+        primaryBtn: {
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 14,
+            paddingVertical: 12,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+            marginTop: 2,
+        },
+        primaryText: { fontSize: 14, fontWeight: "600", color: COLORS.accentText },
 
-    secondaryBtn: {
-        marginTop: 12,
-        borderRadius: 14,
-        paddingVertical: 12,
-        alignItems: "center",
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.2)",
-        backgroundColor: "rgba(255,255,255,0.04)",
-    },
-    secondaryText: { color: "white", fontWeight: "700" },
+        secondaryBtn: {
+            marginTop: 12,
+            borderRadius: 14,
+            paddingVertical: 12,
+            alignItems: "center",
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+        },
+        secondaryText: { color: COLORS.text, fontWeight: "700" },
 
-    smallBtn: {
-        backgroundColor: ACCENT_BG,
-        paddingHorizontal: 10,
-        paddingVertical: 8,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: "#D8B4FE",
-        alignSelf: "flex-end",
-    },
-    smallBtnText: { color: "#111827", fontWeight: "600", fontSize: 12 },
+        smallBtn: {
+            backgroundColor: COLORS.accentBg,
+            paddingHorizontal: 10,
+            paddingVertical: 8,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+            alignSelf: "flex-end",
+        },
+        smallBtnText: {
+            color: COLORS.accentText,
+            fontWeight: "600",
+            fontSize: 12,
+        },
 
-    statusCard: {
-        marginTop: 14,
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.15)",
-        borderRadius: 14,
-        padding: 12,
-        backgroundColor: "rgba(255,255,255,0.04)",
-    },
-    statusTitle: { color: "white", fontWeight: "600", fontSize: 14 },
-    statusSub: { color: "#C7CDD6", marginTop: 4, fontSize: 12 },
+        statusCard: {
+            marginTop: 14,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            borderRadius: 14,
+            padding: 12,
+            backgroundColor: COLORS.card,
+        },
+        statusHeader: {
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+        },
+        statusTitle: { color: COLORS.text, fontWeight: "600", fontSize: 14 },
+        statusSub: { color: COLORS.muted, marginTop: 4, fontSize: 12 },
 
-    mono: { color: "white", fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace", fontSize: 12 },
+        mono: {
+            color: COLORS.text,
+            fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+            fontSize: 12,
+        },
 
-    kvRow: {
-        flexDirection: "row",
-        justifyContent: "space-between",
-        alignItems: "center",
-        paddingVertical: 6,
-        borderTopWidth: 1,
-        borderTopColor: "rgba(229,231,235,0.08)",
-    },
-    kvLabel: { color: "#9CA3AF", fontSize: 12, fontWeight: "800" },
-    kvValue: {
-        flex: 1,
-        marginLeft: 12,
-        color: "white",
-        fontSize: 12,
-        textAlign: "right",
-        fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-    },
+        kvRow: {
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+            paddingVertical: 6,
+            borderTopWidth: 1,
+            borderTopColor: COLORS.border,
+        },
+        kvLabel: { color: COLORS.subtle, fontSize: 12, fontWeight: "800" },
+        kvValue: {
+            flex: 1,
+            marginLeft: 12,
+            color: COLORS.text,
+            fontSize: 12,
+            textAlign: "right",
+            fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+        },
 
-    backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: "rgba(0,0,0,0.55)" },
-    modalCard: {
-        position: "absolute",
-        left: 16,
-        right: 16,
-        top: 80,
-        bottom: 80,
-        backgroundColor: "#0B0F14",
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.15)",
-        padding: 12,
-    },
-    modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-    modalTitle: { color: "white", fontWeight: "600", fontSize: 16 },
+        backdrop: { ...StyleSheet.absoluteFillObject },
+        modalCard: {
+            position: "absolute",
+            left: 16,
+            right: 16,
+            top: 80,
+            bottom: 80,
+            backgroundColor: COLORS.bg,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            padding: 12,
+        },
+        modalHeader: {
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+        },
+        modalTitle: {
+            color: COLORS.text,
+            fontWeight: "600",
+            fontSize: 16,
+        },
 
-    chip: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.2)",
-        backgroundColor: "rgba(255,255,255,0.04)",
-    },
-    chipActive: { backgroundColor: ACCENT_BG, borderColor: "#D8B4FE" },
-    chipText: { color: "white", fontWeight: "800", fontSize: 12 },
-    chipTextActive: { color: "#111827" },
+        chip: {
+            paddingHorizontal: 10,
+            paddingVertical: 6,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: COLORS.borderSoft,
+            backgroundColor: COLORS.card,
+        },
+        chipActive: {
+            backgroundColor: COLORS.accentBg,
+            borderColor: COLORS.accentBorder,
+        },
+        chipText: {
+            color: COLORS.text,
+            fontWeight: "800",
+            fontSize: 12,
+        },
+        chipTextActive: {
+            color: COLORS.accentText,
+        },
 
-    reqRow: {
-        padding: 10,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.15)",
-        backgroundColor: "rgba(255,255,255,0.04)",
-        marginBottom: 8,
-    },
-    reqRowActive: { borderColor: "#D8B4FE", backgroundColor: "rgba(243,232,255,0.12)" },
-    reqRowTitle: { color: "white", fontWeight: "600" },
-    reqRowSub: { color: "#9CA3AF", marginTop: 2, fontSize: 12 },
+        modalActionsRow: {
+            flexDirection: "row",
+            gap: 8,
+            marginTop: 10,
+            alignItems: "center",
+        },
 
-    vcModalCard: {
-        position: "absolute",
-        left: 16,
-        right: 16,
-        top: 90,
-        bottom: 90,
-        backgroundColor: "#0B0F14",
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: "rgba(229,231,235,0.15)",
-        padding: 12,
-    },
-    jwtBox: {
-        fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
-        fontSize: 12,
-        minHeight: 160,
-        maxHeight: 260,
-        textAlignVertical: "top",
-    },
-});
+        reqRow: {
+            padding: 10,
+            borderRadius: 12,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            backgroundColor: COLORS.card,
+            marginBottom: 8,
+        },
+        reqRowActive: {
+            borderColor: COLORS.accentBorder,
+            backgroundColor: COLORS.accentBg,
+        },
+        reqRowTitle: {
+            color: COLORS.text,
+            fontWeight: "600",
+        },
+        reqRowSub: {
+            color: COLORS.subtle,
+            marginTop: 2,
+            fontSize: 12,
+        },
+
+        vcModalCard: {
+            position: "absolute",
+            left: 16,
+            right: 16,
+            top: 90,
+            bottom: 90,
+            backgroundColor: COLORS.bg,
+            borderRadius: 16,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            padding: 12,
+        },
+        jwtBox: {
+            fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
+            fontSize: 12,
+            minHeight: 160,
+            maxHeight: 260,
+            textAlignVertical: "top",
+        },
+
+        emptyText: {
+            color: COLORS.subtle,
+            marginTop: 10,
+        },
+        linkText: {
+            color: COLORS.accentText,
+            fontWeight: "600",
+        },
+        btnRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+        },
+    });

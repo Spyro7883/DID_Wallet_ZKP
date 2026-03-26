@@ -19,9 +19,10 @@ import type { RootStackParamList, WalletKind } from "../src/navigation/types";
 import { loadLastWallet } from "../src/storage/walletSession";
 import CreateItem from "./createItems";
 import { ItemDetailsPopup } from "./itemDetailsPopup";
-import { COLORS } from "../src/theme/colors";
-
 import { SafeAreaView } from "react-native-safe-area-context";
+
+import { type AppColors } from "../src/theme/colors";
+import { useAppTheme } from "../src/theme/AppThemeProvider";
 
 type RouteT = RouteProp<RootStackParamList, "WalletItems">;
 
@@ -43,6 +44,10 @@ const CHIPS: { label: string; value: WalletKind }[] = [
 ];
 
 export default function WalletItemsScreen() {
+    const { colors } = useAppTheme();
+    const COLORS = colors;
+    const styles = useMemo(() => createStyles(COLORS), [COLORS]);
+
     const navigation = useNavigation<any>();
     const route = useRoute<RouteT>();
 
@@ -165,6 +170,7 @@ export default function WalletItemsScreen() {
 
     const renderItem = ({ item }: { item: Item }) => {
         const badge = item.kind.toUpperCase();
+
         return (
             <Pressable style={styles.card} onPress={() => openDetails(item)}>
                 <View style={styles.cardRow}>
@@ -192,7 +198,6 @@ export default function WalletItemsScreen() {
 
     return (
         <SafeAreaView style={[styles.container, { paddingTop: TOP_PAD }]}>
-            {/* header (centered) */}
             <View style={styles.topBar}>
                 <Pressable onPress={() => navigation.goBack()} hitSlop={10} style={styles.topLeft}>
                     <MaterialIcons name="arrow-back" size={24} color={COLORS.text} />
@@ -205,7 +210,6 @@ export default function WalletItemsScreen() {
                 </Pressable>
             </View>
 
-            {/* search */}
             <View style={styles.searchBox}>
                 <MaterialIcons name="search" size={20} color={COLORS.subtle} />
                 <TextInput
@@ -214,10 +218,10 @@ export default function WalletItemsScreen() {
                     placeholder="Search DIDs, credentials, presentations"
                     placeholderTextColor={COLORS.subtle}
                     style={styles.searchInput}
+                    {...(Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : {})}
                 />
             </View>
 
-            {/* chips */}
             <View style={styles.chipsRow}>
                 {CHIPS.map((c) => {
                     const active = c.value === kind;
@@ -227,13 +231,14 @@ export default function WalletItemsScreen() {
                             onPress={() => setKind(c.value)}
                             style={[styles.chip, active && styles.chipActive]}
                         >
-                            <Text style={[styles.chipText, active && styles.chipTextActive]}>{c.label}</Text>
+                            <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                                {c.label}
+                            </Text>
                         </Pressable>
                     );
                 })}
             </View>
 
-            {/* list */}
             {loading ? (
                 <View style={{ paddingTop: 18 }}>
                     <ActivityIndicator />
@@ -277,67 +282,76 @@ export default function WalletItemsScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: COLORS.bg, paddingHorizontal: 16, paddingBottom: 16 },
+const createStyles = (COLORS: AppColors) =>
+    StyleSheet.create({
+        container: {
+            flex: 1,
+            backgroundColor: COLORS.bg,
+            paddingHorizontal: 16,
+            paddingBottom: 16,
+        },
 
-    topBar: {
-        height: 48,
-        justifyContent: "center",
-        alignItems: "center",
-        marginBottom: 12,
-    },
-    topLeft: { position: "absolute", left: 0, padding: 4 },
-    topRight: { position: "absolute", right: 0, padding: 4 },
-    topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
+        topBar: {
+            height: 48,
+            justifyContent: "center",
+            alignItems: "center",
+            marginBottom: 12,
+        },
+        topLeft: { position: "absolute", left: 0, padding: 4 },
+        topRight: { position: "absolute", right: 0, padding: 4 },
+        topTitle: { color: COLORS.text, fontSize: 18, fontWeight: "600" },
 
-    searchBox: {
-        flexDirection: "row",
-        alignItems: "center",
-        gap: 10,
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        borderRadius: 999,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        backgroundColor: COLORS.card,
-    },
-    searchInput: { flex: 1, fontSize: 13, color: COLORS.text },
+        searchBox: {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            borderRadius: 999,
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            backgroundColor: COLORS.card,
+        },
+        searchInput: { flex: 1, fontSize: 13, color: COLORS.text },
 
-    chipsRow: { flexDirection: "row", gap: 8, marginTop: 12 },
-    chip: {
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 999,
-        borderWidth: 1,
-        borderColor: COLORS.borderSoft,
-        backgroundColor: COLORS.card,
-    },
-    chipActive: { backgroundColor: COLORS.accentBg, borderColor: COLORS.accentBorder },
-    chipText: { fontSize: 12, color: COLORS.text, fontWeight: "700" },
-    chipTextActive: { color: COLORS.accentText },
+        chipsRow: { flexDirection: "row", gap: 8, marginTop: 12 },
+        chip: {
+            paddingHorizontal: 10,
+            paddingVertical: 6,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: COLORS.borderSoft,
+            backgroundColor: COLORS.card,
+        },
+        chipActive: {
+            backgroundColor: COLORS.accentBg,
+            borderColor: COLORS.accentBorder,
+        },
+        chipText: { fontSize: 12, color: COLORS.text, fontWeight: "700" },
+        chipTextActive: { color: COLORS.accentText },
 
-    card: {
-        borderWidth: 1,
-        borderColor: COLORS.border,
-        borderRadius: 14,
-        paddingHorizontal: 12,
-        paddingVertical: 12,
-        marginBottom: 10,
-        backgroundColor: COLORS.card,
-    },
-    cardRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
-    badge: {
-        backgroundColor: COLORS.accentBg,
-        borderRadius: 10,
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderWidth: 1,
-        borderColor: COLORS.accentBorder,
-    },
-    badgeText: { fontSize: 11, fontWeight: "600", color: COLORS.accentText },
+        card: {
+            borderWidth: 1,
+            borderColor: COLORS.border,
+            borderRadius: 14,
+            paddingHorizontal: 12,
+            paddingVertical: 12,
+            marginBottom: 10,
+            backgroundColor: COLORS.card,
+        },
+        cardRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
+        badge: {
+            backgroundColor: COLORS.accentBg,
+            borderRadius: 10,
+            paddingHorizontal: 8,
+            paddingVertical: 4,
+            borderWidth: 1,
+            borderColor: COLORS.accentBorder,
+        },
+        badgeText: { fontSize: 11, fontWeight: "600", color: COLORS.accentText },
 
-    cardTitle: { fontSize: 13, fontWeight: "600", color: COLORS.text },
-    cardSub: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
+        cardTitle: { fontSize: 13, fontWeight: "600", color: COLORS.text },
+        cardSub: { fontSize: 11, color: COLORS.muted, marginTop: 2 },
 
-    empty: { color: COLORS.subtle, marginTop: 14, textAlign: "center" },
-});
+        empty: { color: COLORS.subtle, marginTop: 14, textAlign: "center" },
+    });
