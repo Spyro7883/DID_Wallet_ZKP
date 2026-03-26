@@ -11,7 +11,6 @@ export const BACKUPS_DIR: string | null = baseDir ? `${baseDir}backups/` : null;
 export async function ensureBackupsDir(): Promise<string | null> {
   if (!BACKUPS_DIR) return null;
 
-  // Pe web expo-file-system e limitat; mai safe să nu încerci folder
   if (Platform.OS === "web") return null;
 
   const info = await FS.getInfoAsync(BACKUPS_DIR);

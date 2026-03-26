@@ -6,14 +6,13 @@ export const metadata: Metadata = {
   description: "Institution issuer/verifier portal",
 };
 
-
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body>
         <ThemeRegistry>{children}</ThemeRegistry>
       </body>

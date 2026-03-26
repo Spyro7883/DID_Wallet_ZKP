@@ -149,12 +149,8 @@ export default function Page() {
     const [me, setMe] = React.useState<MeResponse["admin"] | null>(null);
     const [health, setHealth] = React.useState<HealthResponse | null>(null);
 
-    const [pendingVcRequests, setPendingVcRequests] = React.useState<
-        PendingVcRequestRow[]
-    >([]);
-    const [openProofRequests, setOpenProofRequests] = React.useState<
-        ProofRequestRow[]
-    >([]);
+    const [pendingVcRequests, setPendingVcRequests] = React.useState<PendingVcRequestRow[]>([]);
+    const [openProofRequests, setOpenProofRequests] = React.useState<ProofRequestRow[]>([]);
     const [recentIssued, setRecentIssued] = React.useState<IssuedVcRow[]>([]);
     const [recentProofs, setRecentProofs] = React.useState<ProofRequestRow[]>([]);
 
@@ -196,47 +192,26 @@ export default function Page() {
                 ),
             ]);
 
-            if (issuerRes.status === "fulfilled") {
-                setIssuer(issuerRes.value);
-            } else {
-                setIssuer(null);
-            }
+            if (issuerRes.status === "fulfilled") setIssuer(issuerRes.value);
+            else setIssuer(null);
 
-            if (meRes.status === "fulfilled") {
-                setMe(meRes.value.admin);
-            } else {
-                setMe(null);
-            }
+            if (meRes.status === "fulfilled") setMe(meRes.value.admin);
+            else setMe(null);
 
-            if (healthRes.status === "fulfilled") {
-                setHealth(healthRes.value);
-            } else {
-                setHealth(null);
-            }
+            if (healthRes.status === "fulfilled") setHealth(healthRes.value);
+            else setHealth(null);
 
-            if (pendingVcRes.status === "fulfilled") {
-                setPendingVcRequests(pendingVcRes.value.items || []);
-            } else {
-                setPendingVcRequests([]);
-            }
+            if (pendingVcRes.status === "fulfilled") setPendingVcRequests(pendingVcRes.value.items || []);
+            else setPendingVcRequests([]);
 
-            if (openProofsRes.status === "fulfilled") {
-                setOpenProofRequests(openProofsRes.value.items || []);
-            } else {
-                setOpenProofRequests([]);
-            }
+            if (openProofsRes.status === "fulfilled") setOpenProofRequests(openProofsRes.value.items || []);
+            else setOpenProofRequests([]);
 
-            if (recentIssuedRes.status === "fulfilled") {
-                setRecentIssued(recentIssuedRes.value.items || []);
-            } else {
-                setRecentIssued([]);
-            }
+            if (recentIssuedRes.status === "fulfilled") setRecentIssued(recentIssuedRes.value.items || []);
+            else setRecentIssued([]);
 
-            if (recentProofsRes.status === "fulfilled") {
-                setRecentProofs(recentProofsRes.value.items || []);
-            } else {
-                setRecentProofs([]);
-            }
+            if (recentProofsRes.status === "fulfilled") setRecentProofs(recentProofsRes.value.items || []);
+            else setRecentProofs([]);
 
             const failedCount = [
                 issuerRes,
@@ -299,17 +274,12 @@ export default function Page() {
 
         return recentIssued.filter((x) => {
             const t = new Date(x.created_at || x.issuance_date);
-            return (
-                t.getFullYear() === y &&
-                t.getMonth() === m &&
-                t.getDate() === d
-            );
+            return t.getFullYear() === y && t.getMonth() === m && t.getDate() === d;
         }).length;
     }, [recentIssued]);
 
     const alerts = React.useMemo(() => {
-        const out: Array<{ severity: "warning" | "info" | "error"; text: string }> =
-            [];
+        const out: Array<{ severity: "warning" | "info" | "error"; text: string }> = [];
 
         if (!health || health.status !== "ok") {
             out.push({
@@ -373,11 +343,7 @@ export default function Page() {
                 </Box>
 
                 <Stack direction="row" gap={1} flexWrap="wrap">
-                    <Button
-                        variant="outlined"
-                        onClick={() => void load(true)}
-                        disabled={refreshing}
-                    >
+                    <Button variant="outlined" onClick={() => void load(true)} disabled={refreshing}>
                         {refreshing ? "Refreshing..." : "Refresh"}
                     </Button>
 
@@ -531,6 +497,7 @@ export default function Page() {
                                         borderRadius: 2,
                                         border: "1px solid",
                                         borderColor: "divider",
+                                        bgcolor: "background.paper",
                                         display: "flex",
                                         justifyContent: "space-between",
                                         alignItems: "center",

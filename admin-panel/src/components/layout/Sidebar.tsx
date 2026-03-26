@@ -12,7 +12,7 @@ import {
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const W = 260;
+export const SIDEBAR_WIDTH = 260;
 
 const NAV = [
     { label: "Dashboard", href: "/dashboard" },
@@ -30,16 +30,18 @@ export default function Sidebar() {
         <Drawer
             variant="permanent"
             sx={{
-                width: W,
+                width: SIDEBAR_WIDTH,
                 flexShrink: 0,
                 [`& .MuiDrawer-paper`]: {
-                    width: W,
+                    width: SIDEBAR_WIDTH,
                     boxSizing: "border-box",
-                    borderRightColor: "divider",
+                    borderRight: "1px solid",
+                    borderColor: "divider",
+                    bgcolor: "background.paper",
                 },
             }}
         >
-            <Box sx={{ p: 2 }}>
+            <Box sx={{ p: 2.5 }}>
                 <Typography fontWeight={800}>Admin Panel</Typography>
                 <Typography variant="caption" color="text.secondary">
                     Issuer / Verifier
@@ -59,7 +61,20 @@ export default function Sidebar() {
                             component={Link}
                             href={item.href}
                             selected={active}
-                            sx={{ borderRadius: 2, mb: 0.5 }}
+                            sx={{
+                                borderRadius: 2,
+                                mb: 0.5,
+                                "&.Mui-selected": {
+                                    bgcolor: "action.selected",
+                                    color: "primary.main",
+                                    "& .MuiListItemText-primary": {
+                                        fontWeight: 700,
+                                    },
+                                },
+                                "&.Mui-selected:hover": {
+                                    bgcolor: "action.selected",
+                                },
+                            }}
                         >
                             <ListItemText primary={item.label} />
                         </ListItemButton>
@@ -68,13 +83,6 @@ export default function Sidebar() {
             </List>
 
             <Box sx={{ flex: 1 }} />
-
-            <Divider />
-            <Box sx={{ p: 2 }}>
-                <Typography variant="caption" color="text.secondary">
-                    v0.1 (demo)
-                </Typography>
-            </Box>
         </Drawer>
     );
 }

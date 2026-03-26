@@ -63,6 +63,18 @@ export default function Page() {
     const [note, setNote] = React.useState("");
     const [approving, setApproving] = React.useState<number | null>(null);
 
+    const [subjectDid, setSubjectDid] = React.useState("");
+    const [vcType, setVcType] = React.useState("CitizenshipCredential");
+    const [claimsText, setClaimsText] = React.useState(`{"citizenship":"RO"}`);
+    const [validityDays, setValidityDays] = React.useState<string>("");
+
+    const [issuing, setIssuing] = React.useState(false);
+    const [err, setErr] = React.useState("");
+    const [result, setResult] = React.useState<any>(null);
+
+    const [recent, setRecent] = React.useState<IssuedRow[]>([]);
+    const [loadingRecent, setLoadingRecent] = React.useState(true);
+
     async function loadPending() {
         setLoadingPending(true);
         try {
@@ -98,7 +110,6 @@ export default function Page() {
 
             setSelected(null);
             setNote("");
-
             await Promise.all([loadPending(), loadRecent()]);
         } catch (e: any) {
             setErr(e?.message || "Approve failed");
@@ -106,18 +117,6 @@ export default function Page() {
             setApproving(null);
         }
     }
-
-    const [subjectDid, setSubjectDid] = React.useState("");
-    const [vcType, setVcType] = React.useState("CitizenshipCredential");
-    const [claimsText, setClaimsText] = React.useState(`{"citizenship":"RO"}`);
-    const [validityDays, setValidityDays] = React.useState<string>("");
-
-    const [issuing, setIssuing] = React.useState(false);
-    const [err, setErr] = React.useState("");
-    const [result, setResult] = React.useState<any>(null);
-
-    const [recent, setRecent] = React.useState<IssuedRow[]>([]);
-    const [loadingRecent, setLoadingRecent] = React.useState(true);
 
     async function loadRecent() {
         setLoadingRecent(true);
@@ -159,7 +158,9 @@ export default function Page() {
                 type: vcType,
                 claims: claimsObj,
             };
-            if (validityDays.trim()) body.validityDays = Number(validityDays.trim());
+            if (validityDays.trim()) {
+                body.validityDays = Number(validityDays.trim());
+            }
 
             const res = await api("/admin/vc/issue", {
                 method: "POST",
@@ -178,7 +179,9 @@ export default function Page() {
     const copy = async (v: string) => navigator.clipboard.writeText(v);
 
     const downloadJson = (obj: any, filename: string) => {
-        const blob = new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" });
+        const blob = new Blob([JSON.stringify(obj, null, 2)], {
+            type: "application/json",
+        });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
         a.download = filename;
@@ -244,6 +247,7 @@ export default function Page() {
                                         border: "1px solid",
                                         borderColor: "divider",
                                         borderRadius: 2,
+                                        bgcolor: "background.paper",
                                         display: "flex",
                                         justifyContent: "space-between",
                                         gap: 2,
@@ -306,7 +310,6 @@ export default function Page() {
                                     <Typography variant="body2" color="text.secondary">
                                         Validity days: <b>{selected.validity_days ?? "-"}</b>
                                     </Typography>
-
                                 </Stack>
 
                                 <TextField
@@ -484,6 +487,7 @@ export default function Page() {
                                         border: "1px solid",
                                         borderColor: "divider",
                                         borderRadius: 2,
+                                        bgcolor: "background.paper",
                                         display: "flex",
                                         justifyContent: "space-between",
                                         gap: 2,

@@ -425,6 +425,7 @@ export default function Page() {
                                         border: "1px solid",
                                         borderColor: "divider",
                                         borderRadius: 2,
+                                        bgcolor: "background.paper",
                                         display: "flex",
                                         justifyContent: "space-between",
                                         gap: 2,
@@ -453,11 +454,7 @@ export default function Page() {
 
                                             <Chip
                                                 size="small"
-                                                label={
-                                                    item.auditKind === "issuance"
-                                                        ? "VC"
-                                                        : "PROOF"
-                                                }
+                                                label={item.auditKind === "issuance" ? "VC" : "PROOF"}
                                                 variant="outlined"
                                             />
                                         </Stack>

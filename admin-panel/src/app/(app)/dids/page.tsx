@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import {
+    Alert,
     Box,
     Card,
     CardContent,
@@ -16,9 +17,9 @@ import {
     DialogActions,
     TextField,
     MenuItem,
+    InputAdornment,
 } from "@mui/material";
 import { api } from "@/lib/api";
-import { InputAdornment } from "@mui/material";
 
 type IssuerRow = {
     did: string;
@@ -66,8 +67,12 @@ export default function Page() {
     };
 
     const exportDidDoc = async (did: string) => {
-        const res = await api<{ ok: boolean; did: string; didDoc: any }>(`/admin/issuer/diddoc?did=${encodeURIComponent(did)}`);
-        const blob = new Blob([JSON.stringify(res.didDoc, null, 2)], { type: "application/json" });
+        const res = await api<{ ok: boolean; did: string; didDoc: any }>(
+            `/admin/issuer/diddoc?did=${encodeURIComponent(did)}`
+        );
+        const blob = new Blob([JSON.stringify(res.didDoc, null, 2)], {
+            type: "application/json",
+        });
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
         a.download = `diddoc_${did.replace(/[:/]/g, "_")}.json`;
@@ -117,39 +122,66 @@ export default function Page() {
 
     return (
         <Box>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
+            <Stack
+                direction="row"
+                justifyContent="space-between"
+                alignItems="center"
+                mb={2}
+                gap={2}
+                flexWrap="wrap"
+            >
                 <Box>
-                    <Typography variant="h4" fontWeight={800}>DID Management</Typography>
-                    <Typography color="text.secondary">Institution issuer DID (active) + history</Typography>
+                    <Typography variant="h4" fontWeight={800}>
+                        DID Management
+                    </Typography>
+                    <Typography color="text.secondary">
+                        Institution issuer DID and DID history
+                    </Typography>
                 </Box>
+
                 <Stack direction="row" spacing={1}>
-                    <Button variant="outlined" onClick={refresh} disabled={loading}>Refresh</Button>
-                    <Button variant="contained" onClick={() => setOpen(true)}>Create new issuer DID</Button>
+                    <Button variant="outlined" onClick={refresh} disabled={loading}>
+                        Refresh
+                    </Button>
+                    <Button variant="contained" onClick={() => setOpen(true)}>
+                        Create new issuer DID
+                    </Button>
                 </Stack>
             </Stack>
 
             {err ? (
-                <Card sx={{ mb: 2 }}>
-                    <CardContent>
-                        <Typography color="error">{err}</Typography>
-                    </CardContent>
-                </Card>
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                    {err}
+                </Alert>
             ) : null}
 
             <Stack spacing={2}>
                 <Card>
                     <CardContent>
                         <Stack spacing={1}>
-                            <Stack direction="row" justifyContent="space-between" alignItems="center" gap={2} flexWrap="wrap">
+                            <Stack
+                                direction="row"
+                                justifyContent="space-between"
+                                alignItems="center"
+                                gap={2}
+                                flexWrap="wrap"
+                            >
                                 <Box>
-                                    <Typography variant="overline" color="text.secondary">Active issuer DID</Typography>
+                                    <Typography variant="overline" color="text.secondary">
+                                        Active issuer DID
+                                    </Typography>
                                     <Typography fontWeight={800} sx={{ wordBreak: "break-all" }}>
-                                        {loading ? "Loading..." : (activeDid || "-")}
+                                        {loading ? "Loading..." : activeDid || "-"}
                                     </Typography>
                                 </Box>
+
                                 <Stack direction="row" spacing={1}>
-                                    <Button variant="outlined" onClick={() => copy(activeDid)} disabled={!activeDid}>Copy</Button>
-                                    <Button variant="outlined" onClick={() => exportDidDoc(activeDid)} disabled={!activeDid}>Export DID Doc</Button>
+                                    <Button variant="outlined" onClick={() => copy(activeDid)} disabled={!activeDid}>
+                                        Copy
+                                    </Button>
+                                    <Button variant="outlined" onClick={() => exportDidDoc(activeDid)} disabled={!activeDid}>
+                                        Export DID Doc
+                                    </Button>
                                 </Stack>
                             </Stack>
 
@@ -166,8 +198,12 @@ export default function Page() {
 
                 <Card>
                     <CardContent>
-                        <Typography variant="overline" color="text.secondary">All issuer DIDs</Typography>
-                        <Typography variant="h6" fontWeight={800} mb={1}>Select active</Typography>
+                        <Typography variant="overline" color="text.secondary">
+                            All issuer DIDs
+                        </Typography>
+                        <Typography variant="h6" fontWeight={800} mb={1}>
+                            Select active
+                        </Typography>
 
                         <Stack spacing={1}>
                             {(all || []).map((x) => (
@@ -178,6 +214,7 @@ export default function Page() {
                                         border: "1px solid",
                                         borderColor: "divider",
                                         borderRadius: 2,
+                                        bgcolor: "background.paper",
                                         display: "flex",
                                         alignItems: "center",
                                         justifyContent: "space-between",
@@ -194,19 +231,28 @@ export default function Page() {
                                     </Box>
 
                                     <Stack direction="row" spacing={1} flexShrink={0}>
-                                        <Button size="small" variant="outlined" onClick={() => copy(x.did)}>Copy</Button>
-                                        <Button size="small" variant="outlined" onClick={() => exportDidDoc(x.did)}>DID Doc</Button>
+                                        <Button size="small" variant="outlined" onClick={() => copy(x.did)}>
+                                            Copy
+                                        </Button>
+                                        <Button size="small" variant="outlined" onClick={() => exportDidDoc(x.did)}>
+                                            DID Doc
+                                        </Button>
                                         <Button
                                             size="small"
                                             variant={x.did === activeDid ? "contained" : "outlined"}
                                             onClick={() => setActiveIssuer(x.did)}
                                             disabled={x.did === activeDid || settingActiveDid === x.did}
                                         >
-                                            {settingActiveDid === x.did ? "Setting..." : x.did === activeDid ? "Active" : "Set active"}
+                                            {settingActiveDid === x.did
+                                                ? "Setting..."
+                                                : x.did === activeDid
+                                                    ? "Active"
+                                                    : "Set active"}
                                         </Button>
                                     </Stack>
                                 </Box>
                             ))}
+
                             {!loading && all.length === 0 ? (
                                 <Typography color="text.secondary">No issuer DIDs yet.</Typography>
                             ) : null}
@@ -251,11 +297,12 @@ export default function Page() {
                             }}
                             disabled={creating}
                         />
-
                     </Stack>
                 </DialogContent>
                 <DialogActions>
-                    <Button onClick={() => setOpen(false)} disabled={creating}>Cancel</Button>
+                    <Button onClick={() => setOpen(false)} disabled={creating}>
+                        Cancel
+                    </Button>
                     <Button variant="contained" onClick={createIssuer} disabled={creating}>
                         {creating ? "Creating..." : "Create"}
                     </Button>

@@ -2,7 +2,14 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { Box, Card, CardContent, TextField, Typography, Button } from "@mui/material";
+import {
+    Box,
+    Card,
+    CardContent,
+    TextField,
+    Typography,
+    Button,
+} from "@mui/material";
 import { api } from "@/lib/api";
 import { setToken } from "@/lib/auth";
 
@@ -27,12 +34,21 @@ export default function LoginPage() {
     };
 
     return (
-        <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>
-            <Card sx={{ width: 420 }}>
+        <Box
+            sx={{
+                minHeight: "100vh",
+                display: "grid",
+                placeItems: "center",
+                bgcolor: "background.default",
+                p: 2,
+            }}
+        >
+            <Card sx={{ width: 420, maxWidth: "100%" }}>
                 <CardContent sx={{ p: 4 }}>
                     <Typography variant="h5" fontWeight={700} mb={1}>
                         Admin Panel
                     </Typography>
+
                     <Typography color="text.secondary" mb={3}>
                         Institution issuer / verifier
                     </Typography>
@@ -44,6 +60,7 @@ export default function LoginPage() {
                         onChange={(e) => setEmail(e.target.value)}
                         sx={{ mb: 2 }}
                     />
+
                     <TextField
                         fullWidth
                         label="Password"

@@ -66,8 +66,10 @@ function statusChip(st: string) {
 function resultChip(result?: string | null, error?: string | null) {
     const r = String(result || "").toLowerCase();
     if (!r) return null;
-    if (r === "accepted") return <Chip size="small" label="accepted" color="success" variant="outlined" />;
-    if (r === "rejected")
+    if (r === "accepted") {
+        return <Chip size="small" label="accepted" color="success" variant="outlined" />;
+    }
+    if (r === "rejected") {
         return (
             <Chip
                 size="small"
@@ -76,12 +78,24 @@ function resultChip(result?: string | null, error?: string | null) {
                 variant="outlined"
             />
         );
+    }
     return <Chip size="small" label={r} variant="outlined" />;
 }
 
-function extractLists(constraints: any) {
-    const vcTypes = Array.isArray(constraints?.vcTypes) ? constraints.vcTypes.map(String) : [];
-    const rules = Array.isArray(constraints?.rules) ? constraints.rules.map(String) : [];
+function extractLists(constraints: unknown): { vcTypes: string[]; rules: string[] } {
+    const c = (constraints ?? {}) as {
+        vcTypes?: unknown;
+        rules?: unknown;
+    };
+
+    const vcTypes = Array.isArray(c.vcTypes)
+        ? c.vcTypes.map((x: unknown) => String(x))
+        : [];
+
+    const rules = Array.isArray(c.rules)
+        ? c.rules.map((x: unknown) => String(x))
+        : [];
+
     return { vcTypes, rules };
 }
 
@@ -166,13 +180,20 @@ export default function RequestsClient() {
 
     return (
         <Box>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2} gap={2} flexWrap="wrap">
+            <Stack
+                direction="row"
+                justifyContent="space-between"
+                alignItems="center"
+                mb={2}
+                gap={2}
+                flexWrap="wrap"
+            >
                 <Box>
                     <Typography variant="h4" fontWeight={800}>
                         Proof Requests
                     </Typography>
                     <Typography color="text.secondary">
-                        Monitor presentation requests (created automatically by users/services)
+                        Monitor presentation requests created automatically by users or services
                     </Typography>
                 </Box>
 
@@ -233,6 +254,7 @@ export default function RequestsClient() {
                                     border: "1px solid",
                                     borderColor: "divider",
                                     borderRadius: 2,
+                                    bgcolor: "background.paper",
                                     display: "flex",
                                     justifyContent: "space-between",
                                     gap: 2,
@@ -330,14 +352,14 @@ export default function RequestsClient() {
 
                             <Stack direction="row" gap={1} flexWrap="wrap">
                                 {vcTypes.length ? <Chip label="vcTypes" size="small" variant="outlined" /> : null}
-                                {vcTypes.map((t) => (
+                                {vcTypes.map((t: string) => (
                                     <Chip key={t} label={t} size="small" />
                                 ))}
                             </Stack>
 
                             <Stack direction="row" gap={1} flexWrap="wrap">
                                 {rules.length ? <Chip label="rules" size="small" variant="outlined" /> : null}
-                                {rules.map((r) => (
+                                {rules.map((r: string) => (
                                     <Chip key={r} label={r} size="small" />
                                 ))}
                             </Stack>

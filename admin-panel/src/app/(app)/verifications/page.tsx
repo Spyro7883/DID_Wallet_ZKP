@@ -311,6 +311,7 @@ export default function Page() {
                                         border: "1px solid",
                                         borderColor: "divider",
                                         borderRadius: 2,
+                                        bgcolor: "background.paper",
                                         display: "flex",
                                         justifyContent: "space-between",
                                         gap: 2,
