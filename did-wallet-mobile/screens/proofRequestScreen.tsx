@@ -351,6 +351,7 @@ export default function ProofRequestScreen() {
         for (const item of vcs) {
             if (!(REQUIRED_TYPES as readonly string[]).includes(item.title)) continue;
             if (String(item.subjectId || "") !== holderDid.trim()) continue;
+            if (item.hasLocalSecret === false) continue;
 
             const arr = map.get(item.title) ?? [];
             arr.push(item);
@@ -394,6 +395,7 @@ export default function ProofRequestScreen() {
     const listForDisplay = useMemo(() => {
         return [...vcs]
             .filter((x) => (REQUIRED_TYPES as readonly string[]).includes(x.title))
+            .filter((x) => x.hasLocalSecret !== false)
             .sort((a, b) => {
                 const ai = REQUIRED_TYPES.indexOf(
                     a.title as (typeof REQUIRED_TYPES)[number],
