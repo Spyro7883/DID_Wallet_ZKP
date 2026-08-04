@@ -9,7 +9,16 @@ proven with **zero-knowledge proofs verified on-chain**.
 > DIDs, Solidity verifier on Ethereum Sepolia, a React Native wallet, and a Next.js issuer console.
 
 https://github.com/user-attachments/assets/600183ac-76a6-4d31-9c9e-3240330d26c9
-<!-- 🎥 **Demo:** <link> · 📄 Deployed verifier (Sepolia): <etherscan link> -->
+
+**Live on Ethereum Sepolia (verified source):**
+[`aggregateVerifier`](https://sepolia.etherscan.io/address/0xE7B5c562C321AE2489e3d43d0A19Fd05694306C9)
+· [`VerifiableSignals`](https://sepolia.etherscan.io/address/0xAA4a42719C57F7398d7DF05971139e5218610105)
+
+<sub>
+0:00 create wallet &amp; identity · 0:40 request a credential — raw values stay on device ·
+1:00 issuer approves, only the Poseidon commitment is stored · 1:30 proof request against the verifier's rules ·
+1:40 an out-of-range income trips the circuit's assert · 2:00 the verification record and its public constraints
+</sub>
 
 ---
 
