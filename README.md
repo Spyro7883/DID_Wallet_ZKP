@@ -10,15 +10,18 @@ proven with **zero-knowledge proofs verified on-chain**.
 
 https://github.com/user-attachments/assets/600183ac-76a6-4d31-9c9e-3240330d26c9
 
+**What you're watching**
+
+- **0:00** — create a wallet and a local identity
+- **0:40** — request a credential; raw values never leave the device, only a commitment is sent
+- **1:00** — the issuer approves and issues against the Poseidon commitment
+- **1:30** — a verifier asks for a proof: `age ≥ 18`, `citizenship == RO`, `income ∈ [1000, 5000]`
+- **1:40** — an out-of-range income fails the aggregate circuit's assert
+- **2:00** — the verification record, with only the public constraints stored
+
 **Live on Ethereum Sepolia (verified source):**
 [`aggregateVerifier`](https://sepolia.etherscan.io/address/0xE7B5c562C321AE2489e3d43d0A19Fd05694306C9)
 · [`VerifiableSignals`](https://sepolia.etherscan.io/address/0xAA4a42719C57F7398d7DF05971139e5218610105)
-
-<sub>
-0:00 create wallet &amp; identity · 0:40 request a credential — raw values stay on device ·
-1:00 issuer approves, only the Poseidon commitment is stored · 1:30 proof request against the verifier's rules ·
-1:40 an out-of-range income trips the circuit's assert · 2:00 the verification record and its public constraints
-</sub>
 
 ---
 
