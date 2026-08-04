@@ -8,7 +8,7 @@ proven with **zero-knowledge proofs verified on-chain**.
 > Built as my Bachelor's thesis @ Politehnica Bucharest. Circom + Groth16, Veramo/cheqd
 > DIDs, Solidity verifier on Ethereum Sepolia, a React Native wallet, and a Next.js issuer console.
 
-<!-- TODO: add a 30–60s demo GIF or video link here — this is the single highest-impact addition -->
+https://github.com/user-attachments/assets/600183ac-76a6-4d31-9c9e-3240330d26c9
 <!-- 🎥 **Demo:** <link> · 📄 Deployed verifier (Sepolia): <etherscan link> -->
 
 ---
